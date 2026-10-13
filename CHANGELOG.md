@@ -2,6 +2,11 @@
 
 ## Unreleased — staged integration candidate
 
+- Restored CPAMC traffic and provider-fleet presentation over a bounded, independently validated API-key usage projection. Kept OAuth exclusion, unavailable windows and valid zero traffic explicit; removed stale charts when host polling pauses.
+- Added reproducible private-root qualification and a pinned, isolated Docker deployment with per-project volumes and persistent session tokens.
+- Reused one hosted healthcheck selection across repeated/concurrent reads, enforced backend restart after package refresh, verified installed inventories and rejected duplicate backends.
+- Excluded known credential/runtime artifacts from qualification copies and Docker build context, including mixed-case filenames.
+- Exercised real loopback CPA traffic through the authenticated WSL backend and Windows Desktop, plus clean-image qualification boundaries; retained candidate release gates and explicit expiring permits.
 - Added explicit checksum-pinned managed setup, separate management/inference credentials, persistent owned CPA and broker startup, provider enrollment and remembered opt-in autostart.
 - Kept registration inert by default and incomplete/unsupported installations fail-closed before managed side effects.
 - Added scoped service leases and per-plugin policy epochs so unrelated Hermes settings do not kill managed services while relevant revocation still does.

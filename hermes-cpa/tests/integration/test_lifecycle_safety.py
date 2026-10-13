@@ -58,9 +58,11 @@ def test_ready_requires_typed_compatible_probe(owner):
 
 
 def test_early_exit_and_explicit_restart(owner):
+    owner.readiness_timeout = 5
     owner.command = [sys.executable, '-c', 'raise SystemExit(7)']
     assert not owner.start_child()
     assert owner.sanitized_reason == 'child_exited'
+    assert owner.child_process.returncode == 7
     owner.command = [sys.executable, '-c', 'import time; time.sleep(30)']
     owner.probe = ready
     assert owner.start_child()

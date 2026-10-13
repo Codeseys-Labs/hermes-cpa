@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import pytest
 from hermes_cpa.cpa_adapter import CpaAdapter
 from hermes_cpa.settings import RequestScope
-from hermes_cpa.telemetry import TelemetryCollector
 
 
 @pytest.fixture
@@ -86,10 +85,84 @@ def test_wrong_service_redirect_version(server, status, version, body):
 
 def test_usage_projection_discards_all_key_material(server):
     origin, state = server
-    state.body = {'PROVIDER_CANARY': {'https://secret|API_KEY_CANARY': {'success': 0, 'failed': 0}}}
+    state.body = {
+        'team-production-proxy': {
+            'https://private.example/v1|sk-live-generated': {
+                'success': 5, 'failed': 2, 'model': 'MODEL_CANARY',
+                'recent_requests': [
+                    {'success': 1, 'failed': 0, 'time': '12:00-12:10', 'key': 'BUCKET_CANARY'}
+                    for _ in range(20)],
+            },
+        },
+    }
     ok, usage = CpaAdapter(origin, state.key).probe_usage()
-    assert ok and usage['total_success'] == 0
+    assert ok and state.authorized and state.hits == 1
+    assert set(usage) == {'available', 'timestamp', 'unit', 'scope', 'credential_entries',
+                          'total_success', 'total_failed', 'providers', 'window'}
+    assert usage['scope'] == 'api_key_credentials'
+    assert (usage['credential_entries'], usage['total_success'], usage['total_failed']) == (1, 5, 2)
+    expected = [{'success': 1, 'failed': 0} for _ in range(20)]
+    assert usage['providers'] == [
+        {'provider': 'other', 'credential_entries': 1, 'success': 5, 'failed': 2, 'buckets': expected},
+    ]
+    assert usage['window'] == {'available': True, 'bucket_seconds': 600, 'buckets': expected}
+    encoded = json.dumps(usage)
+    for private in ('CANARY', 'team-production-proxy', 'private.example', 'sk-live-generated', '12:00-12:10'):
+        assert private not in encoded
+
+
+def test_usage_empty_map_is_observed_no_entries_not_a_quiet_window(server):
+    origin, state = server
+    state.body = {}
+    ok, usage = CpaAdapter(origin, state.key).probe_usage()
+    assert ok and usage['available']
+    assert usage['credential_entries'] == 0
+    assert usage['total_success'] == usage['total_failed'] == 0
+    assert usage['providers'] == []
+    assert usage['window'] == {'available': False, 'bucket_seconds': 600, 'buckets': []}
+
+
+@pytest.mark.parametrize('recent', [None, [], [{'success': 0, 'failed': 0}] * 21])
+def test_usage_bad_recent_data_keeps_lifetime_observation(server, recent):
+    origin, state = server
+    state.body = {'codex': {'private-key': {'success': 4, 'failed': 1, 'recent_requests': recent}}}
+    ok, usage = CpaAdapter(origin, state.key).probe_usage()
+    assert ok and usage['available']
+    assert (usage['credential_entries'], usage['total_success'], usage['total_failed']) == (1, 4, 1)
+    assert usage['providers'] == [
+        {'provider': 'codex', 'credential_entries': 1, 'success': 4, 'failed': 1, 'buckets': []},
+    ]
+    assert usage['window'] == {'available': False, 'bucket_seconds': 600, 'buckets': []}
+
+
+@pytest.mark.parametrize('status,version,body', [
+    (503, 'v8.0.21', {'error': 'SERVICE_CANARY'}),
+    (302, 'v8.0.21', {}),
+    (200, 'v9.0.0', {}),
+    (200, 'v8.0.21', []),
+    (200, 'v8.0.21', {'codex': {'key': {'success': True, 'failed': 0}}}),
+    (200, 'v8.0.21', {'codex': {'key': {'success': 2 ** 53, 'failed': 0}}}),
+    (200, 'v8.0.21', {'codex': {'key': {'success': 2 ** 53 - 1, 'failed': 1}}}),
+])
+def test_unavailable_usage_never_becomes_zero_or_echoes_upstream(server, status, version, body):
+    origin, state = server
+    state.status, state.version, state.body = status, version, body
+    ok, usage = CpaAdapter(origin, state.key).probe_usage()
+    assert not ok and not usage['available']
+    assert usage['credential_entries'] is usage['total_success'] is usage['total_failed'] is None
+    assert usage['providers'] == []
+    assert usage['window'] == {'available': False, 'bucket_seconds': 600, 'buckets': []}
     assert 'CANARY' not in json.dumps(usage)
-    assert TelemetryCollector.normalize_usage(None)['total_success'] is None
-    assert TelemetryCollector.normalize_usage({})['total_success'] == 0
-    assert not TelemetryCollector.normalize_usage({'p': {'k': {'success': True, 'failed': 0}}})['available']
+    assert state.hits == 1
+
+
+def test_usage_source_response_size_is_bounded_before_projection(server):
+    origin, state = server
+    state.body = {'codex': {'private-key': {
+        'success': 1, 'failed': 0, 'ignored': 'x' * (1024 * 1024),
+    }}}
+    ok, usage = CpaAdapter(origin, state.key).probe_usage()
+    assert not ok
+    assert usage['credential_entries'] is usage['total_success'] is usage['total_failed'] is None
+    assert usage['providers'] == []
+    assert usage['window'] == {'available': False, 'bucket_seconds': 600, 'buckets': []}

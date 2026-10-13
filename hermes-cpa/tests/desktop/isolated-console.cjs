@@ -13,11 +13,15 @@ const {_electron}=require(path.join(agentRoot,'node_modules/playwright'));
  const html=fs.readFileSync(process.env.CPA_CONSOLE_ASSET||path.join(root,'assets/cpamc.html'),'utf8');
  const source=fs.readFileSync(path.join(root,'desktop/plugin.js'),'utf8').split('export default')[0];
  const digest=crypto.createHash('sha256').update(html).digest('hex');
+ const buckets=Array.from({length:20},(_,index)=>({success:index,failed:index%2,time:'GENERATED_CANARY'}));
+ const usage={available:true,scope:'api_key_credentials',credential_entries:1,total_success:190,total_failed:10,
+   providers:[{provider:'codex',credential_entries:1,success:190,failed:10,buckets,key:'GENERATED_CANARY'}],
+   window:{available:true,bucket_seconds:600,buckets},timestamp:'GENERATED_CANARY',secret:'GENERATED_CANARY'};
  fs.writeFileSync(path.join(plugin,'plugin.js'),source+`\nexport default {id:'hermes-cpa',register(ctx){
  window.__fixture={puts:0,requests:[],revision:'a'.repeat(64),config:{strategy:'round-robin',request_retry:3,request_log:false}};
  const fixture={...ctx,rest:async(p,o)=>{const f=window.__fixture;f.requests.push({path:p,method:o?.method||'GET'});
  if(o?.method==='PUT'){f.puts++;f.config={...f.config,...o.body.changes};f.revision='b'.repeat(64);}
- const data=p==='/console/asset'?{html:${JSON.stringify(html)},manifest:{sha256:${JSON.stringify(digest)}}}:p==='/status'?{mode:'managed',lifecycle:'ready',management_ready:true,inference_configured:false}:p==='/metrics'?{available:false,total_success:0,total_failed:0,secret:'GENERATED_CANARY'}:{...f.config,revision:f.revision};
+ const data=p==='/console/asset'?{html:${JSON.stringify(html)},manifest:{sha256:${JSON.stringify(digest)}}}:p==='/status'?{mode:'managed',lifecycle:'ready',management_ready:true,inference_configured:false}:p==='/metrics'?${JSON.stringify(usage)}:{...f.config,revision:f.revision};
  return {api_version:1,scope_id:'generated-scope',generation:1,revision:f.revision,data};}};
  ctx.onDispose(host.openWorkspace('hermes-cpa-fixture',{title:'CPA fixture',render:()=>jsx(CpaConsole,{ctx:fixture})}));}};`);
  const env={PATH:process.env.PATH,DISPLAY:process.env.DISPLAY,XAUTHORITY:process.env.XAUTHORITY,HOME:sandbox,HERMES_HOME:home,XDG_CONFIG_HOME:sandbox,XDG_CACHE_HOME:sandbox,HERMES_DESKTOP_USER_DATA_DIR:path.join(sandbox,'user-data'),HERMES_DESKTOP_IGNORE_EXISTING:'1',HERMES_DESKTOP_ISOLATED_BACKEND:'1',HERMES_DESKTOP_BOOT_FAKE:'1',HERMES_DESKTOP_BOOT_FAKE_STEP_MS:'50',HERMES_DESKTOP_APP_NAME:'CPA-fixture-'+Date.now(),HERMES_DESKTOP_SKIP_QUIT_CONFIRM:'1',LIBGL_ALWAYS_SOFTWARE:'1'};

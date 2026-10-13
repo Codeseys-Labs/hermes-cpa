@@ -1,0 +1,37 @@
+# Build once, set CPA_QUALIFICATION_IMAGE to the resulting sha256 image ID (or
+# repository@sha256 digest), then use this same value for every project.
+# docker compose -p hermes-cpa-dev -f qualification/compose.yaml up -d
+# Use -p hermes-cpa-check-<id> for disposable independent checks. Never use run
+# to launch a CPA owner: backend, CLI, owner and broker must share this PID ns.
+# All operations use exec -T keepdev python /opt/q/scripts/qualification.py ...
+# Fresh boot prepares only external mode. Explicit permit and cpa setup follow.
+# Rebuild/update: up -d with the new immutable image ID, quiesce --consent,
+# refresh --consent, explicit permit, restart; no generated-state hand editing.
+# Quiesce after recreation because remembered autostart may have resumed CPA.
+name: hermes-cpa-dev
+services:
+  keepdev:
+    image: ${CPA_QUALIFICATION_IMAGE:?Set an immutable local sha256 image ID or repository digest}
+    pull_policy: never
+    platform: linux/amd64
+    user: "10001:10001"
+    init: true
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,mode=1777,size=256m
+    volumes:
+      - data:/work
+    restart: unless-stopped
+    stop_grace_period: 30s
+    command: [python, /opt/q/scripts/qualification.py, serve, --root, /work/q, --prepare-if-missing]
+    healthcheck:
+      test: [CMD, python, /opt/q/scripts/qualification.py, smoke, --root, /work/q]
+      interval: 30s
+      timeout: 45s
+      start_period: 90s
+      retries: 3
+volumes:
+  data:

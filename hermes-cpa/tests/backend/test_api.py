@@ -29,7 +29,9 @@ class Facade:
         return {'revision': self.revision, 'strategy': 'round-robin'}
 
     def get_metrics(self):
-        return {'available': False, 'total_success': None}
+        return {'available': False, 'scope': 'api_key_credentials', 'credential_entries': None,
+                'total_success': None, 'total_failed': None, 'providers': [],
+                'window': {'available': False, 'bucket_seconds': 600, 'buckets': []}}
 
     def submit_config(self, payload):
         self.submissions.append(payload)

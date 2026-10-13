@@ -1,9 +1,9 @@
 {
   "version": "1.25.6",
-  "adaptation_version": "hermes.4-docked-consent",
+  "adaptation_version": "hermes.5-api-key-traffic",
   "cpa_version": "8.0.21",
-  "sha256": "f4ebe9682bb7d323f771df848cdd1b2eb01a9f56cdc899f88f4b9992f934b4b8",
-  "size_bytes": 1215211,
+  "sha256": "85da437adb713e304811b157b0718f41d03abe06558d67f1f1414daf16a792b5",
+  "size_bytes": 1248613,
   "source": "router-for-me/Cli-Proxy-API-Management-Center",
   "tag": "v1.25.6",
   "commit": "5aa1ad64a6494e3741e7d7ffec737107400a62b4",
@@ -213,7 +213,7 @@
     "src/features/config/visualConfigBoolean.ts": "46736d8cf6a3f77446c98eb52ffd856f3353105ddc39efc915bc4ce5aa67080f",
     "src/features/config/visualConfigServer.ts": "0cb97b399328301051659ed4c0cd977967db9094b8ece15cc79791c318d1aa2f",
     "src/features/dashboard/DashboardPage.tsx": "8869d41afb13cf12648f380111bf37ac13baafe8464e05c63530fa6783718197",
-    "src/features/dashboard/HermesDashboard.tsx": "d798c1580ed57cdee7b6f33c3b7a5e9f593619d85726ecc5ea3f3ad74bdff8f2",
+    "src/features/dashboard/HermesDashboard.tsx": "9f71625176f544ae747d9b141d9f7f648749a2fa455a550b3f66595d092bb207",
     "src/features/dashboard/components/LiveWire.module.scss": "c9f2344aff95befed30d7e611db1c925f4ec27b70c1aab89aef99d63efe39646",
     "src/features/dashboard/components/LiveWire.tsx": "17cabfda5650e6989dc614fec6872d11b853ced7eb9f4c3ccc62c44c0b84695e",
     "src/features/dashboard/components/Meter.module.scss": "4cd8bbada728b9517e654669da0e5305bdd172740d5006430e7d25ddc609d93b",
@@ -225,6 +225,7 @@
     "src/features/dashboard/components/curve.ts": "a420250bc638952685f38b9b2c0812af78f01961eac5bdf88a1541f10b9c7ab7",
     "src/features/dashboard/dashboard.module.scss": "79ac5a5546f5d48deee4037720ffd9c2d3d6b97277644b7e922dff4ea6fdada6",
     "src/features/dashboard/hermesPolling.ts": "301ac910a28af5e13728e7a84a7851f9bd0f0ec72cbddc7e9d893aa0b4699f4a",
+    "src/features/dashboard/hermesTraffic.ts": "e853808e57f03079b355d1f7f0a4620c6b269ccb91116f33fb59b91f7081cfdc",
     "src/features/dashboard/hooks/useDashboardOverview.ts": "6a297b60d99f84fa3deabb40b3d994b5b3f867d441223b5b3b28d565fecd529e",
     "src/features/dashboard/types.ts": "9e4ec693890f0f2d561a87ec0da555e6070fad412399e1f847231e593e044f54",
     "src/features/dashboard/utils.ts": "2a4c0ab19ae3648580a89d975ce3441d5ddc82e4dd12fe1b0aa5b54f5f2045e9",
@@ -362,8 +363,8 @@
     "src/hooks/useNow.ts": "81d574f1c0ef379febc0a8e01727b733b77f3eda36d8be5a2ae56cace75d0543",
     "src/hooks/useUnsavedChangesGuard.ts": "3250d39ad1f2cd3ac63a70eb56a509534e3b0e78a6fe1cdceb238eb989010379",
     "src/hooks/useVisualConfig.ts": "b06351d58a86f7bb2fe7ff0da2934fa7182280dfa9dd11523c40b223088a1a9c",
-    "src/i18n/hermes-read.en.json": "af75624dd1ca18c6a4bd67239e727130300a71b0732e049ce68f5ace060a4cfd",
-    "src/i18n/hermesRead.ts": "f0e6312d207d11edc0b1b1cf594670aa5ea038bd9e1b080a7b9acab1c802c97b",
+    "src/i18n/hermes-read.en.json": "f4837a06418565918af1f493162be2af4131457936d3d42351bb6b51da3645ec",
+    "src/i18n/hermesRead.ts": "97d2564f32ca7405d42083b379130127d5c928f1a090ce993aac500c1eca6b59",
     "src/i18n/index.ts": "5bc952a4d1231f0265ae751cb4189dba476a864709f4f5ba8cb88d13f6b499fd",
     "src/i18n/locales/en.json": "28a1a03ac595b1cbd3490fbfd54596ae650532fb56bb1b23857eaa089f6d409a",
     "src/i18n/locales/ko.json": "020053cc35c110c52f6c6c803cd676f0e6dedfedc5368a1cd3de5dace6040397",
@@ -537,6 +538,7 @@
     "tests/fixtures/visualConfig-v8.yaml": "66353d434621249b699ea7ed2f660de6a0e1243436cbe847160b77896428b565",
     "tests/helpers/visualConfig.ts": "1337ee3315dfaeb1a309643cbd8669a84d59fb0ea2508dc307ee44468ecc4566",
     "tests/hermesConfigChanges.test.ts": "2f15367d218e2931122cfb12ebad98306cf9f4e1e5117f30f00af01e43893803",
+    "tests/hermesDashboardTraffic.test.ts": "826e2ce01c803dfdfdfeb6a1df7f52f5450f202536f48c6c6e1af75af8f7c6a1",
     "tests/hermesPolling.test.ts": "ee99d3b2b62676a3279ec0b72833ffb4c3deb5a5ad1015a7866f4b96f7fa5204",
     "tests/hermesReadSlice.test.ts": "7abb13dfa00ff4943f89eb27b421a59920c97651e6fec8e9480aef1b9ea412e8",
     "tests/hermesRoutes.test.ts": "0fcca23f22a8871b5d8e2f5ab41eb9e6e952b1f5d6fe5053fd505329fdde2160",
@@ -647,5 +649,5 @@
     "vite.config.ts": "b755597b25adcd92a71fd1eda8ae0a74e5a99c908b16911237d0781dd533b79c",
     "vite.reference.config.ts": "7115c8d4305fc898fc7f12572f07f252ad2c50f462c6c721804e38edf6cbed49"
   },
-  "scope": "docked console with bounded native consent; full mutation parity remains deferred"
+  "scope": "docked console with bounded native consent and passive API-key traffic; full mutation parity remains deferred"
 }

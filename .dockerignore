@@ -1,0 +1,93 @@
+# Only published qualification inputs enter the build context.
+**
+!scripts/
+!scripts/qualification.py
+!host-integration/
+!host-integration/**
+!hermes-cpa/
+!hermes-cpa/**
+!qualification/
+!qualification/Dockerfile
+!qualification/test_qualification.py
+
+# Denials follow the allowlist so they win even inside included trees. This is
+# exactly the scripts/qualification.py package_files list: names, prefixes
+# (.env also covers .envrc) and suffixes, matched at any depth. That matcher
+# ignores case, so every letter here is a [xX] class. Known credential/runtime
+# artifacts only; secrets inside source files are not detected.
+
+# Dependencies, caches and generated output.
+**/.[gG][iI][tT]
+**/.[vV][eE][rR][iI][fF][iI][cC][aA][tT][iI][oO][nN]
+**/.[vV][eE][nN][vV]
+**/[vV][eE][nN][vV]
+**/[nN][oO][dD][eE]_[mM][oO][dD][uU][lL][eE][sS]
+**/__[pP][yY][cC][aA][cC][hH][eE]__
+**/.[pP][yY][tT][eE][sS][tT]_[cC][aA][cC][hH][eE]
+**/.[rR][uU][fF][fF]_[cC][aA][cC][hH][eE]
+**/.[mM][yY][pP][yY]_[cC][aA][cC][hH][eE]
+**/[dD][iI][sS][tT]
+**/[dD][iI][sS][tT]-[hH][eE][rR][mM][eE][sS]
+**/[dD][iI][sS][tT]-[rR][eE][fF][eE][rR][eE][nN][cC][eE]
+**/[cC][oO][vV][eE][rR][aA][gG][eE]
+**/[tT][eE][sS][tT]-[rR][eE][sS][uU][lL][tT][sS]
+**/[pP][lL][aA][yY][wW][rR][iI][gG][hH][tT]-[rR][eE][pP][oO][rR][tT]
+**/.[dD][sS]_[sS][tT][oO][rR][eE]
+**/[tT][eE][sS][tT][sS]
+**/[uU][vV].[lL][oO][cC][kK]
+**/*.[pP][yY][cC]
+**/*.[pP][yY][oO]
+
+# Credentials, user homes, process state and local evidence.
+**/.[hH][eE][rR][mM][eE][sS]
+**/[uU][sS][eE][rR]-[dD][aA][tT][aA]
+**/[tT][eE][sS][tT]-[hH][oO][mM][eE]
+**/[rR][uU][nN][tT][iI][mM][eE]
+**/[eE][vV][iI][dD][eE][nN][cC][eE]
+**/.[eE][nN][vV]*
+
+# Generated qualification state: session token, permit, marker, locks, backend
+# and selection records, refresh stage and backup directories.
+**/[sS][eE][sS][sS][iI][oO][nN]-[tT][oO][kK][eE][nN]
+**/[cC][aA][nN][dD][iI][dD][aA][tT][eE]-[pP][eE][rR][mM][iI][tT].[jJ][sS][oO][nN]
+**/.[qQ][uU][aA][lL][iI][fF][iI][cC][aA][tT][iI][oO][nN]*
+
+# Common credential and token files and directories.
+**/[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]
+**/[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS].[jJ][sS][oO][nN]
+**/[aA][uU][tT][hH].[jJ][sS][oO][nN]
+**/[tT][oO][kK][eE][nN].[jJ][sS][oO][nN]
+**/[sS][eE][cC][rR][eE][tT][sS]
+**/.[nN][eE][tT][rR][cC]
+**/.[nN][pP][mM][rR][cC]
+**/.[pP][yY][pP][iI][rR][cC]
+**/.[gG][iI][tT]-[cC][rR][eE][dD][eE][nN][tT][iI][aA][lL][sS]
+**/[iI][dD]_[rR][sS][aA]
+**/[iI][dD]_[dD][sS][aA]
+**/[iI][dD]_[eE][cC][dD][sS][aA]
+**/[iI][dD]_[eE][dD]25519
+**/.[sS][sS][hH]
+**/.[aA][wW][sS]
+**/.[gG][nN][uU][pP][gG]
+**/.[dD][oO][cC][kK][eE][rR]
+**/.[kK][uU][bB][eE]
+
+# Key, keystore, database, process, log and archive suffixes.
+**/*.[pP][eE][mM]
+**/*.[kK][eE][yY]
+**/*.[sS][eE][cC][rR][eE][tT]
+**/*.[pP]12
+**/*.[pP][fF][xX]
+**/*.[jJ][kK][sS]
+**/*.[kK][eE][yY][sS][tT][oO][rR][eE]
+**/*.[sS][qQ][lL][iI][tT][eE]
+**/*.[sS][qQ][lL][iI][tT][eE]3
+**/*.[dD][bB]
+**/*.[dD][bB]-[wW][aA][lL]
+**/*.[dD][bB]-[sS][hH][mM]
+**/*.[sS][oO][cC][kK]
+**/*.[pP][iI][dD]
+**/*.[lL][oO][gG]
+**/*.[tT][aA][rR].[gG][zZ]
+**/*.[tT][gG][zZ]
+**/*.[zZ][iI][pP]

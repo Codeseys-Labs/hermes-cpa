@@ -17,6 +17,66 @@ function changesOK(x) {
     k === 'request_retry' ? Number.isInteger(v) && v >= 0 && v <= 10 :
     k === 'request_log' && typeof v === 'boolean');
 }
+const USAGE_PROVIDERS = ['gemini','gemini-interactions','vertex','codex','claude','xai','meta','other'];
+function projectUsage(d) {
+  const invalid = () => { throw new Error('Unavailable'); };
+  const count = v => Number.isSafeInteger(v) && v >= 0;
+  const pair = row => record(row) && count(row.success) && count(row.failed) && count(row.success + row.failed);
+  if (typeof d.available !== 'boolean' || d.scope !== 'api_key_credentials' ||
+      !Array.isArray(d.providers) || d.providers.length > USAGE_PROVIDERS.length ||
+      !record(d.window) || typeof d.window.available !== 'boolean' ||
+      d.window.bucket_seconds !== 600 || !Array.isArray(d.window.buckets)) invalid();
+  if (!d.available) {
+    if (d.credential_entries !== null || d.total_success !== null || d.total_failed !== null ||
+        d.providers.length !== 0 || d.window.available || d.window.buckets.length !== 0) invalid();
+    return {available:false,scope:'api_key_credentials',credential_entries:null,
+      total_success:null,total_failed:null,providers:[],
+      window:{available:false,bucket_seconds:600,buckets:[]}};
+  }
+  if (!count(d.credential_entries) || d.credential_entries > 1000 ||
+      !pair({success:d.total_success,failed:d.total_failed})) invalid();
+  const windowAvailable = d.window.available;
+  const bucketCount = windowAvailable ? 20 : 0;
+  if (d.window.buckets.length !== bucketCount || (windowAvailable && d.credential_entries === 0)) invalid();
+  const seen = new Set(), providers = [];
+  let entries = 0, success = 0, failed = 0;
+  for (const row of d.providers) {
+    if (!record(row)) invalid();
+    const provider = USAGE_PROVIDERS.find(value => value === row.provider);
+    if (!provider || seen.has(provider) || !count(row.credential_entries) ||
+        row.credential_entries < 1 || row.credential_entries > 1000 || !pair(row) ||
+        !Array.isArray(row.buckets) || row.buckets.length !== bucketCount) invalid();
+    seen.add(provider);
+    entries += row.credential_entries; success += row.success; failed += row.failed;
+    if (entries > 1000 || !pair({success,failed})) invalid();
+    const buckets = [];
+    for (const bucket of row.buckets) {
+      if (!pair(bucket)) invalid();
+      buckets.push({success:bucket.success,failed:bucket.failed});
+    }
+    providers.push({provider,credential_entries:row.credential_entries,success:row.success,failed:row.failed,buckets});
+  }
+  if (entries !== d.credential_entries || success !== d.total_success || failed !== d.total_failed) invalid();
+  const buckets = [];
+  let windowSuccess = 0, windowFailed = 0;
+  for (let index = 0; index < bucketCount; index++) {
+    const bucket = d.window.buckets[index];
+    if (!pair(bucket)) invalid();
+    let success = 0, failed = 0;
+    for (const provider of providers) {
+      success += provider.buckets[index].success; failed += provider.buckets[index].failed;
+      if (!pair({success,failed})) invalid();
+    }
+    if (success !== bucket.success || failed !== bucket.failed) invalid();
+    windowSuccess += success; windowFailed += failed;
+    if (!pair({success:windowSuccess,failed:windowFailed})) invalid();
+    buckets.push({success,failed});
+  }
+  providers.sort((a,b) => USAGE_PROVIDERS.indexOf(a.provider) - USAGE_PROVIDERS.indexOf(b.provider));
+  return {available:true,scope:'api_key_credentials',credential_entries:entries,
+    total_success:success,total_failed:failed,providers,
+    window:{available:windowAvailable,bucket_seconds:600,buckets}};
+}
 // Explicit allowlists, including values: arbitrary backend strings are never rendered.
 function project(op, d) {
   if (!record(d)) throw new Error('Unavailable');
@@ -45,11 +105,7 @@ function project(op, d) {
     management_ready:d.management_ready === true,
     inference_configured:typeof d.inference_configured === 'boolean' ? d.inference_configured : null,
   };
-  if (op === 'usage.read') {
-    const source = record(d.usage) ? d.usage : d;
-    const number = v => source.available === true && Number.isFinite(v) && v >= 0 ? v : null;
-    return {available:source.available === true,total_success:number(source.total_success),total_failed:number(source.total_failed)};
-  }
+  if (op === 'usage.read') return projectUsage(d);
   return {accepted:true}; // Pending is NOT persisted/completed.
 }
 async function reconcileOperation({id,scope,live,rest,publish,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {

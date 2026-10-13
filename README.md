@@ -9,8 +9,9 @@ Private staged integration of [CLIProxyAPI](https://github.com/router-for-me/CLI
 - `hermes-cpa/`: unified directory-installable agent/desktop plugin and shipped console asset.
 - `upstream-console/`: CPAMC 1.25.6 source with the paired Hermes sandbox transport.
 - `host-integration/`: explicit host patch and per-file provenance against Hermes commit `0ed432d1871a9a9b169f5a778f6f9444fc13e0c1`.
-- `scripts/`: console build/provenance and host-patch export.
+- `scripts/`: console provenance, host-patch export and private-root qualification.
 - `.pi-flow/`: execution contract and private GitHub tracker configuration.
+- `qualification/`: pinned backend image, isolated Compose deployment and qualification regressions.
 
 ## Host and package installation
 
@@ -57,7 +58,66 @@ The broker supplies request-scoped grants through `key_cmd`; management credenti
 
 Enable the optional desktop component on the patched host, then open **CPA Console**. Reopening focuses the existing docked workspace without replacing chat. The sandbox cannot use browser storage or direct network access. Supported configuration changes require a host-native diff and explicit restart confirmation; unchanged forms cannot restart CPA. Accepted operations reconcile instead of being replayed after an uncertain outcome.
 
+The dashboard reuses CPAMC's traffic chart, provider sparklines and success meters. Its passive projection covers **API-key usage entries**, not distinct accounts or global traffic: OAuth/auth-file activity is excluded. It separates lifetime totals from twenty ten-minute buckets, including the current incomplete interval. Missing data, no entries and a valid quiet window remain distinct. Provider labels are allowlisted; arbitrary names, keys and server timestamps do not reach the guest. A failed host status removes the chart and pauses polling until explicit refresh.
+
 Credential import/editing, OAuth, quota mutation and plugin mutation parity remain deferred. The working console retains its supported read/inventory/configuration paths; it is not a claim that every upstream CPAMC feature is available.
+
+## Persistent qualification deployment
+
+This is a disposable candidate environment, not a live-profile installer. Run from the repository root in Linux/WSL with Docker Compose:
+
+```sh
+docker build -t hermes-cpa-qualification:dev -f qualification/Dockerfile .
+export CPA_QUALIFICATION_IMAGE="$(docker image inspect hermes-cpa-qualification:dev --format '{{.Id}}')"
+dc() { docker compose -p hermes-cpa-dev -f qualification/compose.yaml "$@"; }
+q() { dc exec -T keepdev python /opt/q/scripts/qualification.py "$@"; }
+dc up -d --wait
+q permit --root /work/q --hours 4
+q cpa --root /work/q -- setup \
+  --archive /opt/q/cache/CLIProxyAPI_8.0.21_linux_amd64.tar.gz \
+  --isolated-authorization /work/q/candidate-permit.json --consent
+q smoke --root /work/q --managed
+```
+
+The image uses the public pinned Hermes baseline plus the checked-in patch, frozen host dependencies and checksum-verified CPA archive. Runtime is non-root, read-only except for a private named volume and temporary files, with no external network, published ports, host mounts or Docker socket. CPA, broker, backend and native CLI share one PID namespace; use `exec`, not a separate `compose run` container, for lifecycle commands.
+
+Fresh boot prepares external mode only. The ordinary Docker healthcheck proves authenticated backend access, not managed CPA readiness; `smoke --managed` also requires CPA to be ready. A headless HTTP backend is not an agent-plugin registration lifetime: after its restart, use the explicit owner/start commands below. Remembered autostart applies when Hermes loads the agent plugin.
+
+### Token persistence
+
+`prepare` creates `ROOT/session-token` once, beneath a private Linux root, with no group/other access. `serve` reuses it and passes it to the backend through the child environment, never argv or stdout. Docker stores it at `/work/q/session-token` in `hermes-cpa-dev_data`; container replacement and source refresh preserve it. Do not copy it into an image, Git, a Compose envfile or a Windows plaintext file. Native Desktop verification loaded it into memory from WSL.
+
+This session token is separate from CPA's management/inference credentials, the expiring candidate permit and the private hosted-selection cache. Repeated/concurrent healthchecks reuse one client and cached server-returned epoch. A lost selection cache while the backend is alive requires a backend restart, **not token rotation**. `smoke --expect-token-sha256 <previous-fingerprint>` verifies persistence without printing the token.
+
+### Updating the maintained stack
+
+Rebuild and export the new immutable image ID as above, then:
+
+```sh
+dc up -d --wait
+q quiesce --root /work/q --consent
+q refresh --root /work/q --source /opt/q/hermes-cpa --consent
+q permit --root /work/q --hours 4
+dc restart
+dc up -d --wait
+q cpa --root /work/q -- bootstrap-owner --consent \
+  --isolated-authorization /work/q/candidate-permit.json
+q cpa --root /work/q -- doctor
+q cpa --root /work/q -- start
+q smoke --root /work/q --managed
+```
+
+Image replacement alone does not update the installed plugin in the volume. Refresh verifies the installed inventory, refuses a live CPA owner, replaces the package outside plugin discovery, removes the old permit and invalidates backend health until restart—even for an identical package. It neither adopts modified files nor renews authorization. Permits must be explicitly issued for a positive duration of at most 24 hours; expiry still revokes candidate operation.
+
+For parallel workers, use the same immutable image with a different project name, such as `hermes-cpa-check-<id>`. Each project gets its own volume, home, token and PID namespace. Never share a writable qualification volume between running containers. Quiesce and remove only the explicitly disposable worker project with its own `down -v`; keep `hermes-cpa-dev` and its volume.
+
+Native qualification uses the same CLI: `prepare --root <new-private-linux-directory> --source <package> --archive <pinned-archive>`, explicit `permit`, then `serve --root ... --host <patched-host> --port <unused-loopback-port>`. Use that host's Python 3.14 environment with its declared dependencies and bcrypt. Roots must be outside live Hermes homes and off Windows-backed filesystems. WSL loopback forwarding is still session-token authenticated.
+
+### Qualification limits and recovery
+
+Preparation and refresh fail closed after interruption; refresh is not a power-loss-atomic update across its directory renames. An interrupted preparation can leave an unmarked root; an interrupted refresh can leave a backup or missing package. Do not bypass the marker or silently adopt that state. For a fully disposable generated Docker project, inspect any state worth retaining before explicitly removing/recreating **that project's** volume; doing so destroys its token and configuration. Normal updates preserve the volume.
+
+Known credential/runtime filenames are excluded case-insensitively from package copies and the Docker context. This is not a content scanner for secrets embedded in arbitrary source files. Container qualification does not certify stock Hermes, a packaged Windows release, paid inference, OAuth or credential migration.
 
 ## Build and verification
 
@@ -75,14 +135,17 @@ python scripts/export_host_patch.py --host /path/to/patched-host \
   --base-repo /path/to/hermes-git-checkout
 ```
 
-Observed in the isolated integration work:
+Observed in isolated qualification:
 
-- Native behavioral suites: 457 passing checks across targeted runs, including actual hosted `hermes cpa setup`, the pinned CPA binary, broker enrollment and persistent ownership.
-- Desktop behavior: 79 checks; console: 1,564 tests, TypeScript/Vite build and lint (one existing Fast Refresh warning).
-- Host policy/config/publication: 88 checks; additional authority and CLI-boundary checks, including four session-argument regressions.
-- Real Windows development Desktop connected to the isolated WSL backend: dock beside chat, sandbox restrictions, native confirmation held for 68 seconds, retry setting changed from 3 to 4, CPA restarted with the same owner, broker returned ready, reconciliation and disabled no-op review. The rebuilt shipped console was reopened and read the persisted value.
-- The exported patch passes `git apply --check` against a pristine pinned host.
+- Native plugin suite: 543 checks covered across full and targeted runs. A generated early-exit test exceeded its 250 ms fixture budget under concurrent load; only that test received a longer startup budget and an actual exit-code assertion. All 15 lifecycle checks then passed.
+- Desktop boundaries: all 135 checks covered. The two Python-backed checks required `HERMES_CPA_TEST_PYTHON` to select the qualified environment rather than bare system Python.
+- Console: 1,575 tests, TypeScript/Vite build and lint passed (one existing Fast Refresh warning).
+- Qualification CLI: 35 behavioral checks passed both natively and in the clean pinned image. They cover private roots, inventory tampering, repeated/concurrent selection, restart reconciliation, owner locks, restart-required refresh and sanitized failures.
+- Real pinned CPA made three generated loopback inference calls. The authenticated hosted projection and real Windows development Desktop showed three successes, one API-key usage entry, twenty buckets and the canonical `Other` fleet label, without the raw provider/key labels. The dock remained beside chat; reopening did not duplicate it; guest storage and external fetch remained blocked.
+- A separate generated-REST fixture exercised the shipped guest and production bridge's active, quiet, no-entry and host-failure states, including paused polling and explicit-refresh recovery. It is not evidence of real authentication or CPA behavior.
+- The maintained Docker stack survived image replacement and package refresh with the same session token and a changed, verified package digest. Health refused the refreshed package until backend restart. Two projects ran managed CPA simultaneously on the same image with distinct tokens/volumes; only the disposable worker stack was removed. Mixed-case generated secret canaries were absent from the built image.
+- Earlier native integration also exercised a 68-second host confirmation, persisted configuration change and owned restart/reconciliation. The host patch applies against the pristine pinned baseline.
 
-These are targeted runs, not one full upstream Hermes test suite or packaged-release certification. No live subscription, paid model call, OAuth flow or real credential migration was exercised. Live Hermes and the independent CPA pilot were not modified.
+These are targeted runs, not one full upstream Hermes suite or packaged-release certification. Native verification used an existing qualification environment with a known foreign `.pth` dependency; the Docker image independently installed the frozen dependencies from public sources. No live subscription, paid model call, OAuth flow or real credential migration was exercised. Live Hermes and the independent CPA pilot were not modified.
 
 Tracker: [integration map #1](https://github.com/baladithyab/hermes-cpa/issues/1), [host/package decision #2](https://github.com/baladithyab/hermes-cpa/issues/2), [deferred capability tranche #3](https://github.com/baladithyab/hermes-cpa/issues/3).

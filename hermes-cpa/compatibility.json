@@ -4,7 +4,7 @@
       "cpa_version": "8.0.21",
       "console_version": "1.25.6",
       "platform": "linux_amd64",
-      "console_sha256": "f4ebe9682bb7d323f771df848cdd1b2eb01a9f56cdc899f88f4b9992f934b4b8",
+      "console_sha256": "85da437adb713e304811b157b0718f41d03abe06558d67f1f1414daf16a792b5",
       "binary_sha256": "95435293c56e856db7d70b377d30b2b2c00e32ff1c06c41ae46758a9f6febdee",
       "archive_sha256": "a40164e25a60869df2c489702383d4e64dc27bb08eaafd7b04a101a2f5cfc625",
       "tested_endpoints": [

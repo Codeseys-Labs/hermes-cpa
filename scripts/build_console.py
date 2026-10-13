@@ -42,11 +42,11 @@ def main():
     asset_manifest_path = PACKAGE / 'assets/cpamc.manifest.json'
     manifest = json.loads(asset_manifest_path.read_text())
     manifest.update(
-        adaptation_version='hermes.4-docked-consent', sha256=digest,
+        adaptation_version='hermes.5-api-key-traffic', sha256=digest,
         size_bytes=len(content), source_hashes=sources,
         build=f"Bun {subprocess.check_output([args.bun, '--version'], text=True).strip()}; "
               'VERSION=1.25.6 bun run build; verification recorded separately',
-        scope='docked console with bounded native consent; full mutation parity remains deferred',
+        scope='docked console with bounded native consent and passive API-key traffic; full mutation parity remains deferred',
     )
     compatibility_path = PACKAGE / 'compatibility.json'
     compatibility = json.loads(compatibility_path.read_text())

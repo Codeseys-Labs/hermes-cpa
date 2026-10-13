@@ -9,11 +9,13 @@ const context=vm.createContext({TextEncoder,crypto:require('node:crypto').webcry
 vm.runInContext(code+'\nglobalThis.boundary={createBridge,project};',context);
 const {createBridge,project}=context.boundary;
 const revision='a'.repeat(64);
+const unavailableUsage=()=>({available:false,scope:'api_key_credentials',credential_entries:null,total_success:null,total_failed:null,providers:[],window:{available:false,bucket_seconds:600,buckets:[]}});
+const emptyUsage=()=>({...unavailableUsage(),available:true,credential_entries:0,total_success:0,total_failed:0});
 function fixture(overrides={}) {
  let current='A1',puts=0,consents=0;
  const snapshot={api_version:1,scope_id:'scope-A',generation:1,revision,data:{mode:'managed',lifecycle:'ready',management_ready:true,strategy:'round-robin',request_retry:3,request_log:false,revision}};
  const channel=new MessageChannel();const messages=[];channel.port2.on('message',m=>messages.push(m));
- const bridge=createBridge({port:channel.port1,nonce:'nonce',generation:'session-A1',snapshot,selection:()=>current,captured:'A1',confirm:async()=>{consents++;return true;},rest:async(p,o)=>{if(o?.method==='PUT')puts++;return {...snapshot,data:p==='/metrics'?{available:false,total_success:0,secret:'CANARY'}:snapshot.data};},...overrides});
+ const bridge=createBridge({port:channel.port1,nonce:'nonce',generation:'session-A1',snapshot,selection:()=>current,captured:'A1',confirm:async()=>{consents++;return true;},rest:async(p,o)=>{if(o?.method==='PUT')puts++;return {...snapshot,data:p==='/metrics'?{...unavailableUsage(),secret:'CANARY'}:snapshot.data};},...overrides});
  const send=(op,args={},id=String(messages.length+1))=>channel.port2.postMessage({v:2,id,generation:'session-A1',op,args});
  channel.port2.postMessage({v:2,type:'HELLO',nonce:'nonce',generation:'session-A1'});
  channel.port2.postMessage({v:2,type:'ACK',nonce:'nonce',generation:'session-A1'});
@@ -43,7 +45,28 @@ test('finite model and numeric projections reject secret-like suffixes and boole
  assert.equal(d.items[0].model,'withheld');assert.equal(d.items[0].context_length,null);assert.equal(d.items[0].max_completion_tokens,null);
 });
 const pause=()=>new Promise(r=>setTimeout(r,30));
-test('usage mapping and redaction preserve unavailable versus zero',async()=>{const f=fixture();try{await pause();f.send('usage.read');await pause();assert.equal(f.messages[1].data.available,false);assert.equal(f.messages[1].data.total_success,null);assert.ok(!JSON.stringify(f.messages).includes('CANARY'));assert.equal(project('usage.read',{available:true,total_success:0,total_failed:0}).total_success,0);}finally{f.close();}});
+test('usage mapping and redaction preserve unavailable versus zero',async()=>{const f=fixture();try{await pause();f.send('usage.read');await pause();assert.deepEqual(f.messages[1].data,unavailableUsage());assert.ok(!JSON.stringify(f.messages).includes('CANARY'));assert.equal(project('usage.read',emptyUsage()).total_success,0);}finally{f.close();}});
+test('usage traffic crosses the real channel only as the closed projection',async()=>{
+ const buckets=Array.from({length:20},()=>({success:2,failed:1}));
+ const expected={available:true,scope:'api_key_credentials',credential_entries:1,total_success:40,total_failed:20,
+   providers:[{provider:'codex',credential_entries:1,success:40,failed:20,buckets}],
+   window:{available:true,bucket_seconds:600,buckets}};
+ const data={...expected,secret:'CANARY',timestamp:'CANARY',unit:'CANARY',
+   providers:expected.providers.map(row=>({...row,key:'CANARY',buckets:row.buckets.map(bucket=>({...bucket,time:'CANARY'}))})),
+   window:{...expected.window,buckets:buckets.map(bucket=>({...bucket,time:'CANARY'}))}};
+ const f=fixture({rest:async(p,o)=>{assert.equal(p,'/metrics');assert.equal(o.timeoutMs,9000);return {api_version:1,scope_id:'scope-A',generation:1,revision,data};}});
+ try{await pause();f.send('usage.read');await pause();assert.equal(f.messages[1].ok,true);assert.deepEqual(f.messages[1].data,expected);assert.ok(!JSON.stringify(f.messages).includes('CANARY'));assert.deepEqual(f.counts(),{puts:0,consents:0});}finally{f.close();}
+});
+test('contradictory usage and upstream errors return only a fixed error',async()=>{
+ for(const data of [{...emptyUsage(),total_success:1,secret:'CANARY'},null]){
+  const f=fixture({rest:async()=>{if(data===null)throw Error('CANARY');return {api_version:1,scope_id:'scope-A',generation:1,revision,data};}});
+  try{await pause();f.send('usage.read');await pause();assert.deepEqual(f.messages[1],{v:2,id:'2',generation:'session-A1',ok:false,error:{code:'UNAVAILABLE'}});assert.ok(!JSON.stringify(f.messages).includes('CANARY'));}finally{f.close();}
+ }
+});
+test('usage parameters cannot change its passive endpoint or invoke consent',async()=>{
+ let calls=0;const f=fixture({rest:async()=>{calls++;throw Error('CANARY');}});
+ try{await pause();f.send('usage.read',{url:'CANARY'});await pause();assert.equal(f.messages[1].ok,false);assert.equal(calls,0);assert.deepEqual(f.counts(),{puts:0,consents:0});}finally{f.close();}
+});
 test('typed apply requires consent and revision; no replay',async()=>{const f=fixture();try{await pause();f.send('config.apply',{expected_revision:revision,changes:{request_retry:4}},'1');await pause();assert.equal(f.counts().puts,1);f.send('config.apply',{expected_revision:revision,changes:{request_retry:4}},'1');await pause();assert.equal(f.counts().puts,1);}finally{f.close();}});
 test('invalid fields and bool retry never prompt',async()=>{const f=fixture();try{await pause();f.send('config.apply',{expected_revision:revision,changes:{request_retry:true}});await pause();assert.equal(f.counts().consents,0);assert.equal(f.counts().puts,0);}finally{f.close();}});
 test('scope ABA during consent revokes mutation',async()=>{let resolve;const f=fixture({confirm:()=>new Promise(r=>{resolve=r;})});try{await pause();f.send('config.apply',{expected_revision:revision,changes:{request_retry:4}});await pause();f.change();resolve(true);await pause();assert.equal(f.counts().puts,0);}finally{f.close();}});
