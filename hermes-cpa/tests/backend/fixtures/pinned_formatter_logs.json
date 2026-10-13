@@ -1,0 +1,342 @@
+{
+  "upstream_commit": "54946fa3dfa29c6ca7312ac141a92cdd5e413771",
+  "formatter_sha256": "f79a851d9a8adf1157a293474cf7ebe197c32dc63ec32a24630d483b90a2d905",
+  "rows": [
+    {
+      "line": "[2026-10-12 17:00:00] [--------] [trace] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "trace"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [--------] [trace] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "trace"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [5678abcd] [trace] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "trace"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [5678abcd] [trace] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "trace"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [00000042] [trace] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "trace"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [00000042] [trace] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "trace"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [req] [trace] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "trace"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [req] [trace] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "trace"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [] [trace] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "trace"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [] [trace] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "trace"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [id!_A-9?] [trace] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "trace"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [id!_A-9?] [trace] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "trace"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [--------] [debug] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "debug"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [--------] [debug] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "debug"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [5678abcd] [debug] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "debug"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [5678abcd] [debug] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "debug"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [00000042] [debug] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "debug"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [00000042] [debug] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "debug"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [req] [debug] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "debug"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [req] [debug] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "debug"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [] [debug] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "debug"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [] [debug] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "debug"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [id!_A-9?] [debug] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "debug"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [id!_A-9?] [debug] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "debug"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [--------] [info ] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "info"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [--------] [info ] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "info"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [5678abcd] [info ] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "info"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [5678abcd] [info ] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "info"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [00000042] [info ] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "info"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [00000042] [info ] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "info"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [req] [info ] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "info"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [req] [info ] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "info"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [] [info ] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "info"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [] [info ] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "info"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [id!_A-9?] [info ] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "info"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [id!_A-9?] [info ] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "info"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [--------] [warn ] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "warning"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [--------] [warn ] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "warning"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [5678abcd] [warn ] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "warning"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [5678abcd] [warn ] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "warning"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [00000042] [warn ] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "warning"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [00000042] [warn ] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "warning"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [req] [warn ] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "warning"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [req] [warn ] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "warning"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [] [warn ] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "warning"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [] [warn ] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "warning"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [id!_A-9?] [warn ] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "warning"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [id!_A-9?] [warn ] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "warning"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [--------] [error] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "error"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [--------] [error] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "error"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [5678abcd] [error] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "error"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [5678abcd] [error] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "error"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [00000042] [error] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "error"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [00000042] [error] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "error"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [req] [error] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "error"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [req] [error] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "error"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [] [error] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "error"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [] [error] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "error"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [id!_A-9?] [error] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "error"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [id!_A-9?] [error] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "error"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [--------] [fatal] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "fatal"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [--------] [fatal] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "fatal"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [5678abcd] [fatal] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "fatal"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [5678abcd] [fatal] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "fatal"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [00000042] [fatal] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "fatal"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [00000042] [fatal] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "fatal"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [req] [fatal] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "fatal"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [req] [fatal] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "fatal"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [] [fatal] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "fatal"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [] [fatal] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "fatal"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [id!_A-9?] [fatal] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "fatal"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [id!_A-9?] [fatal] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "fatal"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [--------] [panic] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "panic"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [--------] [panic] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "panic"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [5678abcd] [panic] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "panic"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [5678abcd] [panic] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "panic"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [00000042] [panic] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "panic"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [00000042] [panic] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "panic"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [req] [panic] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "panic"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [req] [panic] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "panic"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [] [panic] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "panic"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [] [panic] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "panic"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [id!_A-9?] [panic] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "panic"
+    },
+    {
+      "line": "[2026-10-12 17:00:00] [id!_A-9?] [panic] [fixture.go:1] generated-canary-message [error] credential=\"generated-canary-credential\"\n",
+      "severity": "panic"
+    }
+  ]
+}

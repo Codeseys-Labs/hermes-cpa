@@ -1,0 +1,207 @@
+{
+  "hermes_base_commit": "0ed432d1871a9a9b169f5a778f6f9444fc13e0c1",
+  "files": [
+    {
+      "path": "agent/command_token_source.py",
+      "before_sha256": "ebd669673e1cd58c77987303c150771b53a5539330aea358563775fe03049b13",
+      "after_sha256": "568fba38647159919ef34be9559352a85e189b5bd4655b5764e60757af991298"
+    },
+    {
+      "path": "apps/desktop/electron/main.ts",
+      "before_sha256": "5e75e301e93499e3e6bcede1da45ce31a4cc6de5e8dd09422f947e193e464cde",
+      "after_sha256": "751ff44c603607558d0736563da865776dedabdd42901a0f07b68a8cd732b659"
+    },
+    {
+      "path": "apps/desktop/electron/plugin-selection.node-test.ts",
+      "before_sha256": null,
+      "after_sha256": "026cb97077f3c0af822d655dbfe54325d4d0d41784b381110278ee334d68fb10"
+    },
+    {
+      "path": "apps/desktop/electron/plugin-selection.ts",
+      "before_sha256": null,
+      "after_sha256": "823d94dff88816956ec8907461d8f83ee559f7f00a8a51c5be3b4f47eaba1d37"
+    },
+    {
+      "path": "apps/desktop/src/api/plugin-selection-session.node-test.ts",
+      "before_sha256": null,
+      "after_sha256": "99b5ff6c7dc3d0d1808dbd131070d4b77af7e811d06015266c339460cee163e0"
+    },
+    {
+      "path": "apps/desktop/src/api/plugin-selection-session.ts",
+      "before_sha256": null,
+      "after_sha256": "a020a516f0e63e7cbca0690664145f66bfbe0bc05b45314bf32ea5937e977e71"
+    },
+    {
+      "path": "apps/desktop/src/api/plugins.ts",
+      "before_sha256": "17c163a7e5122adc28c3cdac9f4c4fa189dcd5c720b062b7c89dedb834d32fb7",
+      "after_sha256": "00db482c1801304895a9774aeae57a69117eb553e7e30a16818e30ce21046044"
+    },
+    {
+      "path": "apps/desktop/src/global.d.ts",
+      "before_sha256": "327f9906e2ace77d2e4bac4366fc863fff1cd4fad202dc66ddcf548a29d26686",
+      "after_sha256": "a83e1637bd1e3e3c1af083e8946da17db2a13d4643f565766667e7c2e33170ce"
+    },
+    {
+      "path": "hermes_cli/config.py",
+      "before_sha256": "be90b9621e066652282f8c757e65e85d7e68e54829b02e4a0128932099009b14",
+      "after_sha256": "d6bbefe64c67853b7e7d573f4d26c605a0240a2d889a2736ed8496de3b44fac0"
+    },
+    {
+      "path": "hermes_cli/main.py",
+      "before_sha256": "805c62a6f5b863b631970438bc63564cc215db3ac23a54eea26239614fe663fe",
+      "after_sha256": "25ea7b3ad2459a9370a19a7555455cf71487fc359bf05ad053cd5eb8d0bdcd00"
+    },
+    {
+      "path": "hermes_cli/plugin_host.py",
+      "before_sha256": "5495576879ed2d6be34e08de3e12c7f1de0fc830ef46e80c23cee29fb46f1f4f",
+      "after_sha256": "62b8b5ab4d11f385ef503ecaa64c3a51ed33ca0caeae510e36b9ae6657a2ee9a"
+    },
+    {
+      "path": "hermes_cli/plugin_host_asgi.py",
+      "before_sha256": null,
+      "after_sha256": "b2c49ef3d26700ca1d9f92424eb7bf0fd4e6aa5d0201547fab287fed8693c6f6"
+    },
+    {
+      "path": "hermes_cli/plugin_host_child.py",
+      "before_sha256": "d97b6355c7fd6c62a48e376f1c629125186f496a116447807bc202470b923b70",
+      "after_sha256": "f5c9dacbb0fc458ea107a56fd8a5353550c0b850fb50ca3608f9b836375cb8ee"
+    },
+    {
+      "path": "hermes_cli/plugin_host_cli.py",
+      "before_sha256": null,
+      "after_sha256": "6ff25ddc0f163d5c086b0505a663673d94a5c119ef3364a36369382b778c6413"
+    },
+    {
+      "path": "hermes_cli/plugin_host_containment.py",
+      "before_sha256": null,
+      "after_sha256": "f067238941a13ae7c55d9d979eb2e6d944bf84d5614c1f1e27fdf0dba2eee7c0"
+    },
+    {
+      "path": "hermes_cli/plugin_host_wire.py",
+      "before_sha256": "12002da20e54d346c8f0989b5f90a9ae957dc15fb7705c57800353ca3dc1b6a0",
+      "after_sha256": "ab7f083a6291d623486f5e4ffca7be5f8456b73459ae6fb3ff869880696fcc34"
+    },
+    {
+      "path": "hermes_cli/plugin_isolation.py",
+      "before_sha256": "08e3d77c6533db10d2ea7d4f96b3e9b252aec5fda8e69580a3539939abef1fbd",
+      "after_sha256": "d6dc77801146cd342ac361c501eb47c43a6d1806b77236bd18362f09346d03c9"
+    },
+    {
+      "path": "hermes_cli/plugin_operation_authority.py",
+      "before_sha256": null,
+      "after_sha256": "4005665fe3974dc2051c9dab05da8dd63870c5382fe5f564b33a063999685416"
+    },
+    {
+      "path": "hermes_cli/plugin_policy_epoch.py",
+      "before_sha256": null,
+      "after_sha256": "e33c82531fbcda7353c817edda0d8549ef4af4beca641358d04c2b63fbb6bcae"
+    },
+    {
+      "path": "hermes_cli/plugin_policy_incarnation.py",
+      "before_sha256": null,
+      "after_sha256": "4885b71e23b82874b6ce5832b2c024f133c42e0738024ad19846022b632cf48a"
+    },
+    {
+      "path": "hermes_cli/plugin_request_context.py",
+      "before_sha256": null,
+      "after_sha256": "430a7c6be18fdd19963a415d1613fbb4cb267c8003e689460b9c32a34b0d1ecc"
+    },
+    {
+      "path": "hermes_cli/plugin_selection_authority.py",
+      "before_sha256": null,
+      "after_sha256": "732aa099b54e3b200ca85bc370802f404dfbbe3be41306e92453a6ed580966d6"
+    },
+    {
+      "path": "hermes_cli/runtime_provider_custom.py",
+      "before_sha256": "b52f93cd54babe6e2191af6d67f90623088d2393a97f575b7b862f7287ed5e3f",
+      "after_sha256": "f30b15e1afd0e7a818b229720c939016c85ce522d25eca0c2df2955ab69b0370"
+    },
+    {
+      "path": "hermes_cli/web_server_dashboard.py",
+      "before_sha256": "272063860496ca6a535dc998bdce73c89e72b7f17398b617eeb3cab015b96afd",
+      "after_sha256": "99e7ab8c4de25707c2cfe22aca3aceb196dc49473a502b7e9d8128c1efe21103"
+    },
+    {
+      "path": "pm/plugin_eviction.py",
+      "before_sha256": "2cdecd9a6065f62b5b7e1ff3961cc94f6c077c12780f79caf63439ce6bcff59e",
+      "after_sha256": "8810cf34a3215a4b998fbf1f86c3a2ffcfaf0e9a3fa29a28748176713cf3ea5e"
+    },
+    {
+      "path": "pm/publication.py",
+      "before_sha256": "4f707e2a2d927c7e96a0327dadfe8af80c811dc288b7d992d2bc683e17860c2b",
+      "after_sha256": "367d5465e29ae856ddc6a8feb4ea297110266c910f3747366cd9cb4a7dd9173d"
+    },
+    {
+      "path": "tests/hermes_cli/test_coalesce_session_args.py",
+      "before_sha256": "f902f3d74902abbeca9fdc14936599498ac1b31e40c525af24d4225337fd5783",
+      "after_sha256": "a8b6af081dfcac59b7a4915fc14044ce69d7425b7a000dcbc80d47aeff54c0ab"
+    },
+    {
+      "path": "tests/hermes_cli/test_plugin_asgi_lifecycle.py",
+      "before_sha256": null,
+      "after_sha256": "7f8ca38bf43dcf02724af0f3c4042c935f7c3439c91c72ee0b78dacbafb19d7f"
+    },
+    {
+      "path": "tests/hermes_cli/test_plugin_host_bounds.py",
+      "before_sha256": null,
+      "after_sha256": "3313f24f0e3298673ce770ebfcc83bdc657dd6f6c493105705fc3ad9b462463d"
+    },
+    {
+      "path": "tests/hermes_cli/test_plugin_host_containment.py",
+      "before_sha256": null,
+      "after_sha256": "798c17d4813079783230bfff6bbad776fb3d8186c288394e03ae9acdc397daf7"
+    },
+    {
+      "path": "tests/hermes_cli/test_plugin_host_request_context.py",
+      "before_sha256": null,
+      "after_sha256": "f21e6aca4364a0ddbad18548253609a972a2c168d347404a4fbeec079331b422"
+    },
+    {
+      "path": "tests/hermes_cli/test_plugin_operation_binding.py",
+      "before_sha256": null,
+      "after_sha256": "7a05d8e2fddbb732733a088b3be6444325adf388204cb50d89fdf68b6842f276"
+    },
+    {
+      "path": "tests/hermes_cli/test_plugin_operation_retirement.py",
+      "before_sha256": null,
+      "after_sha256": "32639470e59ef702a1cb5c82750a3e4fdca31341ac87f12c0701742d3507dec7"
+    },
+    {
+      "path": "tests/hermes_cli/test_plugin_parent_callback_containment.py",
+      "before_sha256": null,
+      "after_sha256": "e3c5bfd80fa8243cd73e41159f9d5c1d9a8881d8497ed992508e356d941c9933"
+    },
+    {
+      "path": "tests/hermes_cli/test_plugin_policy_epoch.py",
+      "before_sha256": null,
+      "after_sha256": "a85980f82d5b4e5e27cc97194dc35feed471453ca12912bf66e8d0add16df6f2"
+    },
+    {
+      "path": "tests/hermes_cli/test_plugin_policy_incarnation.py",
+      "before_sha256": null,
+      "after_sha256": "f9f4ade3dac380e35fbee8dc3a4282c298940eb29ddec6c713fc8eaa5100a5b0"
+    },
+    {
+      "path": "tests/hermes_cli/test_plugin_request_operations.py",
+      "before_sha256": null,
+      "after_sha256": "c7f4c48ca9c0e1df3bf56febaf26a1ae5c545139cf25b429220de278ec08f8bf"
+    },
+    {
+      "path": "tests/hermes_cli/test_plugin_selection_authority.py",
+      "before_sha256": null,
+      "after_sha256": "f918ceaca46618e179859bdd143a6653d3f456b7bb07afd5cfc6f1ad4ba8bc38"
+    },
+    {
+      "path": "tests/hermes_cli/test_plugin_two_profile_context.py",
+      "before_sha256": null,
+      "after_sha256": "9157a3b8ab916b4be212ebcc6e66829079422c8682b1727476178abc3763ca8f"
+    },
+    {
+      "path": "tools/delegate_tool_config.py",
+      "before_sha256": "0c56c92967ace80ba94347383dd0d922e67e42bd58d1505ca36bcdb812658ad1",
+      "after_sha256": "686ed26204ea07385c99323e009df319eb189e7121a5accf4d1495383bd5d426"
+    }
+  ],
+  "host_contract_version": 1,
+  "patch_sha256": "fe2f26aee255f88a06ddd960ac65d6e3c6857f389a97a0eacc5cea167f4d8a9f"
+}

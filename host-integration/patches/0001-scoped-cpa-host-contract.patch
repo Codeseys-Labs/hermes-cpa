@@ -1,0 +1,3185 @@
+diff --git a/agent/command_token_source.py b/agent/command_token_source.py
+index fdcf2e7..f67c7ef 100644
+--- a/agent/command_token_source.py
++++ b/agent/command_token_source.py
+@@ -87,7 +87,7 @@
+                     f"key_cmd for provider {label!r} returned JSON without an 'access_token' field"
+                 )
+             ttl = payload.get("expires_in")
+-            if isinstance(ttl, (int, float)) and ttl > 0:
++            if isinstance(ttl, (int, float)) and not isinstance(ttl, bool) and ttl >= 0:
+                 return token, float(ttl)
+             # CLI helpers often print an absolute ISO 8601 deadline instead of OAuth's relative
+             # lifetime; honour it or the token 401s once past. Lazy import: hermes_cli.auth imports agent.*.
+@@ -114,6 +114,8 @@
+ class CommandTokenSource:
+     """Callable returning a bearer token, cached until shortly before expiry."""
+ 
++    supports_single_request_grants = True
++
+     def __init__(self, command: str, label: str = "custom") -> None:
+         self._command = command
+         self._label = label or "custom"
+@@ -132,8 +134,11 @@
+                 return self._token
+             token, ttl = _mint(self._command, self._label)
+             self._token = token
++            # Explicit zero means single-request grant; never cache a revoked
++            # capability merely because the generic helper default is 15 minutes.
+             self._expires_at = time.monotonic() + (
+-                max(ttl - _TOKEN_REFRESH_LEEWAY_SECONDS, 5.0) if ttl else _NO_TTL_REFRESH_SECONDS
++                0.0 if ttl == 0 else max(ttl - _TOKEN_REFRESH_LEEWAY_SECONDS, 5.0)
++                if ttl is not None else _NO_TTL_REFRESH_SECONDS
+             )
+             logger.debug(
+                 "Minted key_cmd token for provider %s (ttl=%s)",
+diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
+index fcc49e5..5bfe944 100644
+--- a/apps/desktop/electron/main.ts
++++ b/apps/desktop/electron/main.ts
+@@ -7,6 +7,7 @@
+ import path from 'node:path'
+ import tls from 'node:tls'
+ import { pathToFileURL } from 'node:url'
++import { pluginSelectionHeaders } from './plugin-selection'
+ 
+ import {
+   app,
+@@ -16737,7 +16738,7 @@
+ async function fetchJsonForBackend(
+   descriptor,
+   path,
+-  opts: { method?: string; body?: unknown; upload?: unknown; timeoutMs?: number } = {}
++  opts: { method?: string; body?: unknown; upload?: unknown; timeoutMs?: number; headers?: Record<string, string> } = {}
+ ) {
+   const url = `${descriptor.baseUrl}${path}`
+ 
+@@ -16752,7 +16753,7 @@
+       method: opts.method,
+       body: opts.body,
+       timeoutMs: opts.timeoutMs,
+-      headers: descriptor.headers
++      headers: { ...descriptor.headers, ...opts.headers }
+     }
+ 
+     return requestWithOauthFallback(descriptor.baseUrl, {
+@@ -16767,7 +16768,7 @@
+     body: opts.body,
+     upload: opts.upload,
+     timeoutMs: opts.timeoutMs,
+-    headers: descriptor.headers
++    headers: { ...descriptor.headers, ...opts.headers }
+   })
+ }
+ 
+@@ -17498,7 +17499,8 @@
+     method: request?.method,
+     body: request?.body,
+     upload: request?.upload,
+-    timeoutMs: resolveTimeoutMs(request?.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS)
++    timeoutMs: resolveTimeoutMs(request?.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS),
++    headers: pluginSelectionHeaders(requestPath, request?.pluginSelection)
+   })
+ 
+   desktopProfilePreferences.afterProfileRequest(registryConnectionId, request, response, connection.mode)
+@@ -17607,7 +17609,8 @@
+       method: request?.method,
+       body: request?.body,
+       upload: request?.upload,
+-      timeoutMs
++      timeoutMs,
++      headers: pluginSelectionHeaders(apiRoute.requestPath, request?.pluginSelection)
+     })
+   } catch (error) {
+     // A failed rename PATCH must not strand the app on the temporary primary:
+diff --git a/apps/desktop/electron/plugin-selection.node-test.ts b/apps/desktop/electron/plugin-selection.node-test.ts
+new file mode 100644
+index 0000000..187d8ed
+--- /dev/null
++++ b/apps/desktop/electron/plugin-selection.node-test.ts
+@@ -0,0 +1,18 @@
++import assert from 'node:assert/strict'
++import { test } from 'node:test'
++import { pluginSelectionHeaders } from './plugin-selection.js'
++
++test('selection bridge permits only comparison tokens on plugin routes', () => {
++  assert.deepEqual(pluginSelectionHeaders('/api/status'), {})
++  const token = { client: 'generated-window-id', scope: 'a'.repeat(32), epoch: 7 }
++  assert.deepEqual(pluginSelectionHeaders('/api/plugins/hermes-cpa/config', token), {
++    'X-Hermes-Plugin-Client': token.client,
++    'X-Hermes-Plugin-Scope': token.scope,
++    'X-Hermes-Plugin-Epoch': '7'
++  })
++  for (const invalid of [{ ...token, epoch: true }, { ...token, epoch: -1 },
++    { ...token, client: 'injected\r\nheader' }, { ...token, scope: 'bad' }]) {
++    assert.throws(() => pluginSelectionHeaders('/api/plugins/hermes-cpa/config', invalid as never))
++  }
++  assert.throws(() => pluginSelectionHeaders('/api/status', token))
++})
+diff --git a/apps/desktop/electron/plugin-selection.ts b/apps/desktop/electron/plugin-selection.ts
+new file mode 100644
+index 0000000..df175cb
+--- /dev/null
++++ b/apps/desktop/electron/plugin-selection.ts
+@@ -0,0 +1,22 @@
++export interface PluginSelectionToken {
++  client: string
++  scope?: string
++  epoch: number
++}
++
++/** Only comparison tokens cross this bridge. Authentication headers remain
++ * Electron-owned; a renderer cannot provide a credential or a home here. */
++export function pluginSelectionHeaders(path: string, token?: PluginSelectionToken): Record<string, string> {
++  if (token === undefined) return {}
++  if (!/^\/api\/plugins\/[a-zA-Z0-9_-]+\//.test(path) ||
++      typeof token.client !== 'string' || !/^[a-zA-Z0-9_-]{16,128}$/.test(token.client) ||
++      !Number.isSafeInteger(token.epoch) || token.epoch < 0 ||
++      (token.scope !== undefined && !/^[a-f0-9]{32}$/.test(token.scope))) {
++    throw new Error('Invalid plugin selection token')
++  }
++  return {
++    'X-Hermes-Plugin-Client': token.client,
++    'X-Hermes-Plugin-Epoch': String(token.epoch),
++    ...(token.scope ? { 'X-Hermes-Plugin-Scope': token.scope } : {})
++  }
++}
+diff --git a/apps/desktop/src/api/plugin-selection-session.node-test.ts b/apps/desktop/src/api/plugin-selection-session.node-test.ts
+new file mode 100644
+index 0000000..09d29e1
+--- /dev/null
++++ b/apps/desktop/src/api/plugin-selection-session.node-test.ts
+@@ -0,0 +1,63 @@
++import assert from 'node:assert/strict'
++import { test } from 'node:test'
++import { PluginSelectionSession } from './plugin-selection-session.js'
++
++const owner = (profile: string) => ({ profile, connectionId: 'local' })
++const tick = () => new Promise(resolve => setImmediate(resolve))
++
++test('switch invalidates queued reads and deselects old owner before selecting new', async () => {
++  const calls: string[] = []
++  let release!: () => void
++  const held = new Promise<void>(resolve => { release = resolve })
++  const session = new PluginSelectionSession(async (o, path, token) => {
++    calls.push(`${o.profile}:${path}:${token.epoch}`)
++    if (calls.length === 1) await held
++    return { scope_id: 'a'.repeat(32), epoch: token.epoch + 1 }
++  }, () => 'client_identity_1234')
++  session.change(owner('A'))
++  const stale = session.acquire()
++  const refused = assert.rejects(stale, /STALE_SCOPE/)
++  await tick()
++  session.change(owner('B'))
++  release()
++  await refused
++  const current = await session.acquire()
++  assert.equal(current.owner.profile, 'B')
++  assert.deepEqual(calls, ['A:selection:0', 'A:deselection:1', 'B:selection:0'])
++  assert.equal(session.current(current), true)
++  session.change(owner('A'))
++  assert.equal(session.current(current), false)
++  const back = await session.acquire()
++  assert.equal(back.token.epoch, 3)
++  assert.deepEqual(calls.slice(3), ['B:deselection:1', 'A:selection:2'])
++})
++
++test('lost deselection acknowledgment latches closed, never selects another host', async () => {
++  const calls: string[] = []
++  const session = new PluginSelectionSession(async (o, path, token) => {
++    calls.push(`${o.profile}:${path}`)
++    if (path === 'deselection') throw new Error('network lost')
++    return { scope_id: 'b'.repeat(32), epoch: token.epoch + 1 }
++  }, () => 'client_identity_1234')
++  session.change(owner('A'))
++  await session.acquire()
++  session.change(owner('B'))
++  await assert.rejects(session.acquire(), /network lost/)
++  session.change(owner('A'))
++  await assert.rejects(session.acquire(), /network lost/)
++  assert.deepEqual(calls, ['A:selection', 'A:deselection'])
++})
++
++test('late responses and rapid ABA are invalid even before switch acknowledgment', async () => {
++  const session = new PluginSelectionSession(async (_o, _p, token) => ({
++    scope_id: 'c'.repeat(32), epoch: token.epoch + 1
++  }), () => 'client_identity_1234')
++  session.change(owner('A'))
++  const original = await session.acquire()
++  session.change(owner('B'))
++  session.change(owner('A'))
++  assert.equal(session.current(original), false)
++  const next = await session.acquire()
++  assert.equal(next.owner.profile, 'A')
++  assert.notEqual(original.token.epoch, next.token.epoch)
++})
+diff --git a/apps/desktop/src/api/plugin-selection-session.ts b/apps/desktop/src/api/plugin-selection-session.ts
+new file mode 100644
+index 0000000..04b9681
+--- /dev/null
++++ b/apps/desktop/src/api/plugin-selection-session.ts
+@@ -0,0 +1,73 @@
++// Comparison tokens are issued by the authenticated host, never by the guest.
++export interface SelectionOwner {
++  profile: string | null
++  connectionId: string | null
++}
++export interface SelectionToken { client: string; scope?: string; epoch: number }
++interface Acknowledgment { scope_id: string; epoch: number }
++export interface SelectionLease {
++  owner: SelectionOwner
++  token: SelectionToken
++  generation: number
++}
++type Exchange = (owner: SelectionOwner, action: 'selection' | 'deselection', token: SelectionToken) => Promise<Acknowledgment>
++
++export class PluginSelectionSession {
++  private generation = 0
++  private desired: string | null = null
++  private selected: SelectionLease | null = null
++  private tail: Promise<void> = Promise.resolve()
++  private routes = new Map<string, SelectionToken>()
++  private exchange: Exchange
++  private clientId: () => string
++
++  constructor(exchange: Exchange, clientId: () => string = () => crypto.randomUUID()) {
++    this.exchange = exchange
++    this.clientId = clientId
++  }
++
++  change(owner: SelectionOwner): void {
++    const captured = { ...owner }
++    const key = JSON.stringify(captured)
++    if (key === this.desired) return
++    this.desired = key
++    const generation = ++this.generation
++    // Do not recover an ambiguous write by silently minting a new client.
++    // A lost ACK requires explicit connection recovery, not a blind retry.
++    this.tail = this.tail.then(async () => {
++      if (this.selected) {
++        const old = this.selected
++        const ack = await this.exchange(old.owner, 'deselection', old.token)
++        this.routes.set(JSON.stringify(old.owner), this.validate(old.token, ack))
++        this.selected = null
++      }
++      const token = this.routes.get(key) ?? { client: this.clientId(), epoch: 0 }
++      const ack = await this.exchange(captured, 'selection', token)
++      const acknowledged = this.validate(token, ack)
++      this.routes.set(key, acknowledged)
++      this.selected = { owner: captured, token: acknowledged, generation }
++    })
++    // Observe background switch failures without turning the rejected chain green.
++    void this.tail.catch(() => undefined)
++  }
++
++  private validate(token: SelectionToken, ack: Acknowledgment): SelectionToken {
++    if (!ack || !/^[a-f0-9]{32}$/.test(ack.scope_id) || !Number.isSafeInteger(ack.epoch) || ack.epoch <= token.epoch) {
++      throw new Error('STALE_SCOPE')
++    }
++    return { client: token.client, scope: ack.scope_id, epoch: ack.epoch }
++  }
++
++  async acquire(): Promise<SelectionLease> {
++    const generation = this.generation
++    await this.tail
++    if (!this.selected || generation !== this.generation || this.selected.generation !== generation) {
++      throw new Error('STALE_SCOPE')
++    }
++    return this.selected
++  }
++
++  current(lease: SelectionLease): boolean {
++    return lease.generation === this.generation && lease === this.selected
++  }
++}
+diff --git a/apps/desktop/src/api/plugins.ts b/apps/desktop/src/api/plugins.ts
+index d22d5e9..72819c6 100644
+--- a/apps/desktop/src/api/plugins.ts
++++ b/apps/desktop/src/api/plugins.ts
+@@ -3,7 +3,27 @@
+ import type { HermesConnection } from '@/global'
+ import { RECONNECT_ATTEMPT_TIMEOUT_MS, withTimeout } from '@/lib/with-timeout'
+ 
+-import { getApiRequestConnection, getApiRequestProfile, hermesApi, profileScoped } from './client'
++import { $apiRequestScope, getApiRequestConnection, getApiRequestProfile, hermesApi, hermesApiAs, profileScoped } from './client'
++import { PluginSelectionSession, type SelectionOwner } from './plugin-selection-session'
++
++const selectionSessions = new Map<string, PluginSelectionSession>()
++
++function selectionSession(pluginId: string): PluginSelectionSession {
++  let session = selectionSessions.get(pluginId)
++  if (!session) {
++    session = new PluginSelectionSession((owner, action, token) => hermesApiAs(owner, {
++      path: `/api/plugins/${pluginId}/_host/${action}`,
++      method: 'POST',
++      pluginSelection: token,
++      timeoutMs: 9000
++    }))
++    selectionSessions.set(pluginId, session)
++    const bound = session
++    // Observe scope changes even when the plugin has no outstanding requests.
++    $apiRequestScope.subscribe((owner: SelectionOwner) => bound.change(owner))
++  }
++  return session
++}
+ 
+ /** Resolve the ACTIVE backend's connection descriptor, (connectionId,
+  *  profile)-scoped — mirroring how store/profile resolves $connection: a
+@@ -42,6 +62,10 @@
+ /** Options for a plugin REST call — mirrors the app's own `hermesDesktop.api`
+  *  shape, minus the path (which is namespace-derived). */
+ export interface PluginRestOptions {
++  /** Opt in to acknowledged host selection and stale-result suppression. */
++  selectionBound?: boolean
++  /** Host-issued opaque comparison token; never a credential or home. */
++  selection?: { client: string; scope?: string; epoch: number }
+   method?: string
+   body?: unknown
+   /** Single-file multipart upload (see HermesApiRequest.upload). */
+@@ -75,6 +99,20 @@
+   }
+ 
+   const suffix = pluginPathSuffix('pluginRest', path)
++  if (opts.selectionBound) {
++    const session = selectionSession(pluginId)
++    const lease = await session.acquire()
++    const result = await hermesApiAs<T>(lease.owner, {
++      path: `/api/plugins/${pluginId}${suffix}`,
++      method: opts.method,
++      body: opts.body,
++      upload: opts.upload,
++      timeoutMs: opts.timeoutMs,
++      pluginSelection: lease.token
++    })
++    if (!session.current(lease)) throw new Error('STALE_SCOPE')
++    return result
++  }
+ 
+   return hermesApi<T>({
+     path: `/api/plugins/${pluginId}${suffix}`,
+@@ -82,6 +120,7 @@
+     body: opts.body,
+     upload: opts.upload,
+     timeoutMs: opts.timeoutMs,
++    ...(opts.selection ? { pluginSelection: opts.selection } : {}),
+     ...profileScoped()
+   })
+ }
+diff --git a/apps/desktop/src/global.d.ts b/apps/desktop/src/global.d.ts
+index 1dfb879..a9d5bd0 100644
+--- a/apps/desktop/src/global.d.ts
++++ b/apps/desktop/src/global.d.ts
+@@ -1504,6 +1504,7 @@
+     }
+ 
+ export interface HermesApiRequest {
++  pluginSelection?: { client: string; scope?: string; epoch: number }
+   path: string
+   method?: string
+   body?: unknown
+diff --git a/hermes_cli/config.py b/hermes_cli/config.py
+index 576562b..4941f9a 100644
+--- a/hermes_cli/config.py
++++ b/hermes_cli/config.py
+@@ -2030,8 +2030,8 @@
+     from utils import atomic_roundtrip_yaml_save
+ 
+     _refuse_failed_read(config_path, data)
++    existing = require_readable_config_before_write(config_path)
+     if not allow_omissions:
+-        existing = require_readable_config_before_write(config_path)
+         omitted = _omitted_config_paths(existing, data)
+         if omitted:
+             shown = ", ".join(omitted[:12])
+@@ -2045,6 +2045,8 @@
+                 "Pass the complete current config, or use atomic_config_replace() only when "
+                 "deletion by omission is deliberate.",
+             ) from exc
++    from hermes_cli.plugin_policy_epoch import record_policy_write
++    record_policy_write(config_path.parent, existing, data)
+     atomic_roundtrip_yaml_save(config_path, data, extra_content_on_create=extra_content_on_create)
+ 
+ 
+diff --git a/hermes_cli/main.py b/hermes_cli/main.py
+index f03b0c2..4fb338d 100644
+--- a/hermes_cli/main.py
++++ b/hermes_cli/main.py
+@@ -2475,7 +2475,7 @@
+ 
+ 
+ 
+-def _coalesce_session_name_args(argv: list) -> list:
++def _coalesce_session_name_args(argv: list, raw_commands=()) -> list:
+     """Join unquoted multi-word session names after -c/--continue and -r/--resume.
+ 
+     ``hermes -c Pokemon Agent Dev`` → ``['-c', 'Pokemon Agent Dev']``; tokens
+@@ -2488,12 +2488,23 @@
+         "desktop", "gui", "honcho", "claw", "plugins", "security", "acp", "webhook", "peer",
+         "memory", "dump", "debug", "backup", "import", "completion", "logs", "usage",
+     }
++    _SUBCOMMANDS.update(raw_commands)
+     _SESSION_FLAGS = {"-c", "--continue", "-r", "--resume"}
++    from hermes_cli._parser import top_level_value_flag_sets
++    required_values, optional_values = top_level_value_flag_sets()
++    value_flags = (required_values | optional_values) - _SESSION_FLAGS
+ 
+     result = []
+     i = 0
+     while i < len(argv):
+         token = argv[i]
++        if token in value_flags and i + 1 < len(argv):
++            result.extend(argv[i:i + 2])
++            i += 2
++            continue
++        if token in raw_commands:
++            result.extend(argv[i:])
++            break
+         if token in _SESSION_FLAGS:
+             result.append(token)
+             i += 1
+@@ -3311,12 +3322,15 @@
+ 
+ def _attach_plugin_cli_command(subparsers, cmd_info) -> None:
+     """Register one plugin-provided top-level command from its descriptor."""
++    parser_kwargs = {"prefix_chars": "\0", "add_help": False} if cmd_info.get("raw_argv") else {}
+     plugin_parser = subparsers.add_parser(
+         cmd_info["name"],
+         help=cmd_info["help"],
+         description=cmd_info.get("description", ""),
+         formatter_class=__import__("argparse").RawDescriptionHelpFormatter,
++        **parser_kwargs,
+     )
++    plugin_parser._hermes_raw_argv = bool(cmd_info.get("raw_argv"))
+     cmd_info["setup_fn"](plugin_parser)
+     if cmd_info.get("handler_fn") is not None:
+         plugin_parser.set_defaults(func=cmd_info["handler_fn"])
+@@ -3482,7 +3496,9 @@
+     """
+     import io as _io
+ 
+-    _processed_argv = _coalesce_session_name_args(argv)
++    _raw_commands = {name for name, command in getattr(subparsers, "choices", {}).items()
++                     if getattr(command, "_hermes_raw_argv", False)}
++    _processed_argv = _coalesce_session_name_args(argv, _raw_commands)
+     _known_cmds = (
+         set(subparsers.choices.keys()) if hasattr(subparsers, "choices") else set()
+     )
+diff --git a/hermes_cli/plugin_host.py b/hermes_cli/plugin_host.py
+index 6faa9f4..d8166d5 100644
+--- a/hermes_cli/plugin_host.py
++++ b/hermes_cli/plugin_host.py
+@@ -37,7 +37,7 @@
+ from typing import Any, Callable, Dict, Optional
+ 
+ from hermes_cli.plugin_host_wire import (
+-    Channel, PluginHostUnavailable, PluginHostUnsupported, decode, encode, signature_from,
++    Channel, PluginHostDeadline, PluginHostUnavailable, PluginHostUnsupported, decode, encode, signature_from,
+ )
+ 
+ logger = logging.getLogger("hermes_cli.plugins")
+@@ -53,6 +53,8 @@
+ 
+ class PluginHost:
+     """One host process for one :class:`~hermes_cli.plugins.PluginManager` (one profile home)."""
++    supports_hosted_native_cli = True
++
+ 
+     def __init__(self, manager: Any):
+         self._manager = manager
+@@ -66,12 +68,17 @@
+         self._base_context = self._build_base_context()
+         self._loading: Optional[str] = None
+         self._stopping = False
++        self._deadline_failed = False
+         self._deaths: list = []
+         # Bumped per host process: a proxy made for an earlier process must not address this one
+         # (object ids restart at 1, so a stale id would silently land on a different object).
+         self._generation = 0
+         self._releases: list = []
+         self.info: dict[str, Any] = {}
++        from hermes_cli.plugin_operation_authority import RequestOperations
++        from hermes_cli.plugin_request_context import _AUTHORITY
++        self._request_operations = RequestOperations(_AUTHORITY)
++        self._native_cli_outputs: dict[str, tuple] = {}
+ 
+     # -- lifecycle ----------------------------------------------------------------------------------
+     @property
+@@ -114,6 +121,8 @@
+ 
+     def ensure_started(self) -> Channel:
+         with self._lock:
++            if self._deadline_failed:
++                raise PluginHostUnavailable('plugin RPC deadline; explicit host replacement required')
+             if self.alive:
+                 return self._channel  # type: ignore[return-value]
+             self._stopping = False
+@@ -150,6 +159,11 @@
+                 f"its plugins automatically" if code is not None else "the plugin host is not running")
+ 
+     def _on_channel_close(self, generation: int, reason: str) -> None:
++        if generation == self._generation and 'deadline' in reason:
++            # A partial outbound frame is also an ambiguous operation. The
++            # caller contains the captured process; never race it with restart.
++            self._deadline_failed = True
++            self._stopping = True
+         if self._stopping or generation != self._generation:
+             return  # a deliberate shutdown, or a late close from a host already replaced
+         culprit = self._loading
+@@ -183,6 +197,7 @@
+ 
+     def shutdown(self) -> None:
+         self._stopping = True
++        self._request_operations.shutdown()
+         with self._lock:
+             proc, channel = self._proc, self._channel
+             self._proc = self._channel = None
+@@ -287,34 +302,73 @@
+                                            "attr": attr, "args": encode(list(args)), "kwargs": encode(kwargs)})
+ 
+     def asgi_request(self, plugin_name: str, dashboard_dir: str, api_file: str, method: str, path: str,
+-                     query: str, headers: list, body: bytes) -> dict[str, Any]:
+-        """One dashboard ``/api/plugins/<name>/`` request, served by the plugin's router in the host."""
++                     query: str, headers: list, body: bytes, *,
++                     trusted_context: Optional[dict[str, Any]] = None) -> dict[str, Any]:
++        """Forward host-owned metadata separately from untrusted HTTP headers."""
++        if len(body) > 1024 * 1024:
++            raise ValueError("plugin request too large")
++        forwarded = [list(h) for h in headers
++                     if trusted_context is None or h[0].lower() not in
++                     {"authorization", "cookie", "x-hermes-token", "x-hermes-session-token"}]
+         self.ensure_started()
+-        return self._call("asgi", {"plugin": plugin_name, "dashboard_dir": dashboard_dir, "api_file": api_file,
+-                                   "method": method, "path": path, "query": query,
+-                                   "headers": [list(h) for h in headers], "body": encode(body)})
++        request_generation = self._generation
++        from hermes_cli.plugin_policy_incarnation import policy_incarnation
++        policy_home = trusted_context.get('home') if trusted_context else None
++        incarnation = self._base_context.copy().run(
++            policy_incarnation, policy_home, dashboard_dir, api_file) if policy_home else None
++        def enabled():
++            if request_generation != self._generation or not self.alive:
++                return False
++            if incarnation is None or incarnation != self._base_context.copy().run(
++                    policy_incarnation, policy_home, dashboard_dir, api_file):
++                return False
++            from hermes_cli.web_server_dashboard import _hosted_plugin_for_request
++            target = self._base_context.copy().run(_hosted_plugin_for_request, plugin_name)
++            return (target is not None and target[0] is self and
++                    target[1:] == (dashboard_dir, api_file))
++        capability = self._request_operations.open(trusted_context, plugin_name, method, path, body, enabled) if trusted_context else None
++        try:
++            return self._call("asgi", {"plugin": plugin_name, "dashboard_dir": dashboard_dir, "api_file": api_file,
++                                       "method": method, "path": path, "query": query,
++                                       "headers": forwarded, "body": encode(body),
++                                       "trusted_context": trusted_context,
++                                       "request_capability": capability},
++                              generation=request_generation, timeout=10.0)
++        except Exception:
++            if capability:
++                self._request_operations.close(capability, failed=True)
++            raise
++        finally:
++            if capability:
++                self._request_operations.close(capability)
+ 
+     def _unload(self, plugin_key: str) -> None:
++        self._request_operations.shutdown(plugin_key)
+         self._contexts.pop(plugin_key, None)
+         channel = self._channel
+         if channel is None or channel.closed_reason is not None:
+             return
+-        errors = (channel.call("unload", {"plugin_key": plugin_key}) or {}).get("errors") or []
++        errors = (self._call("unload", {"plugin_key": plugin_key}, timeout=10.0) or {}).get("errors") or []
+         for error in errors:
+             logger.warning("Plugin '%s' on_unload callback failed in the plugin host: %s", plugin_key, error)
+ 
+     # -- parent -> host -----------------------------------------------------------------------------
+-    def _call(self, method: str, params: dict[str, Any], *, generation: Optional[int] = None) -> Any:
++    def _call(self, method: str, params: dict[str, Any], *, generation: Optional[int] = None,
++              timeout: Optional[float] = None) -> Any:
+         channel = self._channel
+         try:
+             if channel is None:
+                 raise PluginHostUnavailable("not started")
+             if generation is not None and generation != self._generation:
+                 raise PluginHostUnavailable("this object belonged to a plugin host process that has exited")
+-            if self._releases:
++            if self._releases and timeout is None:
+                 released, self._releases = self._releases, []
+                 channel.call("release", {"refs": released})
+-            return decode(channel.call(method, params), self._resolve_ref)
++            return decode(channel.call(method, params, timeout=timeout), self._resolve_ref)
++        except PluginHostDeadline:
++            from hermes_cli.plugin_host_containment import contain_deadline
++            contain_deadline(self, channel)
++            raise
+         except PluginHostUnavailable as exc:
+             raise PluginHostUnavailable(self._exit_reason()) from exc
+ 
+@@ -350,6 +404,14 @@
+         return (caller or self._base_context).copy()
+ 
+     def _handle(self, method: str, params: dict[str, Any], _origin: Optional[int]) -> Any:
++        if method == "request_operation":
++            return self._request_operations.call(params)
++        if method == "cli_registration":
++            from hermes_cli.plugin_host_cli import register_native_cli
++            return register_native_cli(self, params)
++        if method == "cli_output":
++            from hermes_cli.plugin_host_cli import write_native_output
++            return write_native_output(self, params)
+         if method == "ctx":
+             return self._serve_ctx(params)
+         if method == "facade":
+diff --git a/hermes_cli/plugin_host_asgi.py b/hermes_cli/plugin_host_asgi.py
+new file mode 100644
+index 0000000..0e3d41e
+--- /dev/null
++++ b/hermes_cli/plugin_host_asgi.py
+@@ -0,0 +1,83 @@
++"""Loop-owned dashboard lifecycle admission for the isolated plugin host."""
++import asyncio
++import importlib.util
++import sys
++from contextlib import asynccontextmanager
++from dataclasses import dataclass, field
++from pathlib import Path
++from typing import Any
++
++
++@dataclass
++class _Slot:
++    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
++    epoch: int = 0
++    unloading: int = 0
++    failed: bool = False
++    apps: dict[str, tuple[Any, Any]] = field(default_factory=dict)
++
++
++class DashboardLifetimes:
++    """All methods run on the child's single asyncio loop, never under RPC locks."""
++
++    def __init__(self):
++        self.slots: dict[str, _Slot] = {}
++
++    @asynccontextmanager
++    async def request(self, plugin: str, api_path: Path):
++        slot = self.slots.setdefault(plugin, _Slot())
++        epoch = slot.epoch
++        if slot.failed:
++            raise RuntimeError('dashboard shutdown failed; host restart required')
++        if slot.unloading:
++            raise RuntimeError('dashboard unloading')
++        async with slot.lock:
++            if slot.unloading or slot.epoch != epoch:
++                raise RuntimeError('stale dashboard request')
++            key = str(api_path)
++            if key not in slot.apps:
++                from fastapi import FastAPI
++                module_name = f'hermes_dashboard_plugin_{plugin}'
++                spec = importlib.util.spec_from_file_location(module_name, api_path)
++                if spec is None or spec.loader is None:
++                    raise ImportError(f'cannot load dashboard api {api_path}')
++                module = importlib.util.module_from_spec(spec)
++                sys.modules[module_name] = module
++                try:
++                    spec.loader.exec_module(module)
++                    router = getattr(module, 'router', None)
++                    if router is None:
++                        raise AttributeError(f'dashboard api {api_path.name} has no router')
++                    app = FastAPI()
++                    app.include_router(router)
++                    lifespan = app.router.lifespan_context(app)
++                    await asyncio.wait_for(lifespan.__aenter__(), timeout=3)
++                except BaseException:
++                    if sys.modules.get(module_name) is module:
++                        sys.modules.pop(module_name, None)
++                    raise
++                slot.apps[key] = (app, lifespan)
++            yield slot.apps[key][0]
++
++    async def unload(self, plugin: str) -> list[str]:
++        slot = self.slots.get(plugin)
++        if slot is None:
++            return []
++        # Invalidate queued requests before waiting for the current request. No
++        # re-entrant parent callback needs this loop-owned admission lock.
++        slot.epoch += 1
++        slot.unloading += 1
++        errors = []
++        try:
++            async with slot.lock:
++                apps, slot.apps = slot.apps, {}
++                for _, lifespan in apps.values():
++                    try:
++                        await asyncio.wait_for(lifespan.__aexit__(None, None, None), timeout=3)
++                    except Exception as exc:
++                        slot.failed = True
++                        errors.append(f'{type(exc).__name__}: {exc}')
++                sys.modules.pop(f'hermes_dashboard_plugin_{plugin}', None)
++        finally:
++            slot.unloading -= 1
++        return errors
+diff --git a/hermes_cli/plugin_host_child.py b/hermes_cli/plugin_host_child.py
+index 5dd640e..86bffb2 100644
+--- a/hermes_cli/plugin_host_child.py
++++ b/hermes_cli/plugin_host_child.py
+@@ -36,6 +36,26 @@
+ logger = logging.getLogger("hermes_cli.plugin_host_child")
+ 
+ _ENTRY_POINTS_GROUP = "hermes_agent.plugins"
++
++
++class HostedRequestOperations:
++    """Backend-only request capability; accepted checks retain their original home."""
++
++    def __init__(self, channel, capability):
++        self._channel, self._capability = channel, capability
++
++    def accept(self, operation_id, revision, *, timeout=2.0):
++        return self._channel.call('request_operation', {
++            'verb': 'accept', 'capability': self._capability,
++            'operation_id': operation_id, 'revision': revision}, timeout=min(2.0, timeout))
++
++    def retire(self, accepted, *, timeout=2.0):
++        return self._channel.call('request_operation', {
++            'verb': 'retire', 'capability': accepted['capability']}, timeout=min(2.0, timeout)) is True
++
++    def revalidate(self, accepted, *, timeout=2.0):
++        return self._channel.call('request_operation', {
++            'verb': 'revalidate', 'capability': accepted['capability']}, timeout=min(2.0, timeout)) is True
+ 
+ 
+ class RemoteRegistration:
+@@ -116,6 +136,15 @@
+             raise AttributeError(f"'PluginContext' object has no attribute {name!r}")
+         return functools.partial(self._runtime.ctx_call, self._plugin_key, name)
+ 
++    def register_cli_command(self, name, help, setup_fn, handler_fn=None, description=""):
++        from hermes_cli.plugin_host_cli import native_executor
++        executor = native_executor(self._runtime, self._plugin_key, name, description, setup_fn, handler_fn)
++        return self._runtime._send_call(
++            "cli_registration", self._plugin_key,
++            {"name": name, "help": help, "description": description, "args": [executor]},
++            allow_objects=False,
++        )
++
+     def on_unload(self, callback: Callable[[], Any]) -> None:
+         if not callable(callback):
+             raise TypeError("on_unload() callback must be callable")
+@@ -135,14 +164,17 @@
+         self._lock = threading.Lock()
+         self.unload_callbacks: dict[str, list[Callable[[], Any]]] = {}
+         self.modules: dict[str, str] = {}
+-        self.asgi_apps: dict[str, Any] = {}
++        from hermes_cli.plugin_host_asgi import DashboardLifetimes
++        self.dashboard_lifetimes = DashboardLifetimes()
+         self.profiles: dict[str, dict[str, Any]] = {}
+         self.instance_modules: dict[str, Any] = {}
+         self.stopped = threading.Event()
++        from hermes_cli.plugin_host_cli import NativeCliPump
++        self.native_cli = NativeCliPump(self.stopped)
+         self.loop = asyncio.new_event_loop()
+         threading.Thread(target=self.loop.run_forever, name="plugin-host-loop", daemon=True).start()
+         self.channel = Channel(reader, writer, self.handle, name="plugin-host",
+-                               on_close=lambda _reason: self.stopped.set())
++                               on_close=self.native_cli.close)
+ 
+     # -- references -----------------------------------------------------------------------------
+     def _remember(self, plugin_key: str, value: Any) -> int:
+@@ -300,26 +332,23 @@
+     def op_asgi(self, params: dict[str, Any]) -> Any:
+         """Serve one dashboard API request with the plugin's FastAPI ``router`` (loaded once)."""
+         api_path = Path(str(params["dashboard_dir"])) / str(params["api_file"])
+-        app = self.asgi_apps.get(str(api_path))
+-        if app is None:
+-            from fastapi import FastAPI
+-            module_name = f"hermes_dashboard_plugin_{params['plugin']}"
+-            spec = importlib.util.spec_from_file_location(module_name, api_path)
+-            if spec is None or spec.loader is None:
+-                raise ImportError(f"cannot load dashboard api {api_path}")
+-            module = importlib.util.module_from_spec(spec)
+-            sys.modules[module_name] = module
+-            spec.loader.exec_module(module)
+-            router = getattr(module, "router", None)
+-            if router is None:
+-                raise AttributeError(f"dashboard api {api_path.name} has no 'router'")
+-            app = FastAPI()
+-            app.include_router(router)
+-            self.asgi_apps[str(api_path)] = app
+-
+         async def request() -> dict[str, Any]:
++            async with self.dashboard_lifetimes.request(str(params['plugin']), api_path) as app:
++                return await asyncio.wait_for(dispatch(app), timeout=5)
++
++        async def dispatch(app) -> dict[str, Any]:
+             import httpx
+-            transport = httpx.ASGITransport(app=app)
++            async def scoped_app(scope, receive, send):
++                # Per-request ASGI state, never shared app.state: simultaneous
++                # requests can carry different authenticated selection epochs.
++                scope = dict(scope)
++                scope['state'] = {'hermes_context': params.get('trusted_context')}
++                capability = params.get('request_capability')
++                if capability:
++                    scope['state']['hermes_operations'] = HostedRequestOperations(self.channel, capability)
++                await app(scope, receive, send)
++
++            transport = httpx.ASGITransport(app=scoped_app)
+             async with httpx.AsyncClient(transport=transport, base_url="http://plugin-host") as client:
+                 response = await client.request(
+                     str(params["method"]), str(params["path"]), params=str(params.get("query") or ""),
+@@ -328,7 +357,13 @@
+             return {"status": response.status_code, "headers": list(response.headers.multi_items()),
+                     "body": response.content}
+ 
+-        return encode(self._run(request()))
++        try:
++            # The parent owns the hard total deadline. A nested wait_for here
++            # cancels an inner wait_for's waiter and can return while a plugin
++            # suppresses cancellation in the now-orphaned inner task.
++            return encode(self._run(request()))
++        except TimeoutError as exc:
++            raise TimeoutError('dashboard request or startup timed out') from exc
+ 
+     def op_invoke(self, params: dict[str, Any]) -> Any:
+         ref = int(params["ref"])
+@@ -384,7 +419,7 @@
+ 
+     def op_unload(self, params: dict[str, Any]) -> dict[str, Any]:
+         plugin_key = str(params["plugin_key"])
+-        errors = []
++        errors = self._run(self.dashboard_lifetimes.unload(plugin_key))
+         for callback in reversed(self.unload_callbacks.pop(plugin_key, [])):
+             try:
+                 self._run(callback())
+@@ -401,7 +436,7 @@
+         return {"errors": errors}
+ 
+     def op_shutdown(self, _params: dict[str, Any]) -> None:
+-        for plugin_key in list(self.unload_callbacks):
++        for plugin_key in set(self.unload_callbacks) | set(self.dashboard_lifetimes.slots):
+             self.op_unload({"plugin_key": plugin_key})
+         self.stopped.set()
+ 
+@@ -566,12 +601,14 @@
+ 
+ def main() -> int:
+     reader, writer = _take_protocol_streams()
++    from hermes_cli.plugin_host_cli import route_native_output
++    route_native_output()
+     import hermes_bootstrap
+     logging.basicConfig(stream=sys.stderr, level=os.environ.get("HERMES_PLUGIN_HOST_LOG_LEVEL", "WARNING"),
+                         format="%(levelname)s %(name)s: %(message)s")
+     runtime = HostRuntime(reader, writer)
+     runtime.channel.start()
+-    runtime.stopped.wait()
++    runtime.native_cli.serve()
+     runtime.channel.close("host shutdown")
+     return 0
+ 
+diff --git a/hermes_cli/plugin_host_cli.py b/hermes_cli/plugin_host_cli.py
+new file mode 100644
+index 0000000..ffcc9d9
+--- /dev/null
++++ b/hermes_cli/plugin_host_cli.py
+@@ -0,0 +1,179 @@
++"""Native CLI argv and text streams; third-party parsers stay in their host."""
++from __future__ import annotations
++
++import argparse
++import contextvars
++from concurrent.futures import Future
++import os
++import queue
++import re
++import secrets
++import signal
++import sys
++import threading
++
++from hermes_cli.plugin_host_wire import PluginHostUnsupported, encode
++
++_OUTPUT = contextvars.ContextVar("plugin_cli_output", default=None)
++_MAX_WRITE = 1024 * 1024
++
++
++class NativeCliPump:
++    """Run parsers/handlers on the host's main thread, including signal lifetimes."""
++    def __init__(self, stopped):
++        self.stopped = stopped
++        self.jobs = queue.Queue(maxsize=16)
++        self.running = False
++
++    def call(self, callback):
++        if self.stopped.is_set():
++            raise PluginHostUnsupported("Plugin host is stopping")
++        if threading.current_thread() is threading.main_thread():
++            return callback()
++        future = Future()
++        self.jobs.put_nowait((future, contextvars.copy_context(), callback))
++        return future.result()
++
++    def serve(self):
++        while not self.stopped.is_set():
++            try:
++                future, context, callback = self.jobs.get(timeout=.1)
++            except queue.Empty:
++                continue
++            self.running = True
++            try:
++                future.set_result(context.run(callback))
++            except BaseException as exc:
++                future.set_exception(exc)
++            finally:
++                self.running = False
++
++    def close(self, _reason):
++        self.stopped.set()
++        if self.running:
++            os.kill(os.getpid(), signal.SIGINT)
++
++
++class _RemoteOutput:
++    def __init__(self, runtime, plugin, capability, stream):
++        self.runtime, self.plugin, self.capability, self.stream = runtime, plugin, capability, stream
++
++    def write(self, text):
++        if len(text.encode("utf-8")) > _MAX_WRITE:
++            raise PluginHostUnsupported("Native plugin CLI writes are limited to 1 MiB")
++        self.runtime._send_call("cli_output", self.plugin, {
++            "capability": self.capability, "stream": self.stream, "text": text,
++        }, allow_objects=False)
++        return len(text)
++
++    def flush(self):
++        self.runtime._send_call("cli_output", self.plugin, {
++            "capability": self.capability, "stream": self.stream, "text": "", "flush": True,
++        }, allow_objects=False)
++
++
++class _ContextStream:
++    def __init__(self, fallback, index):
++        self.fallback, self.index = fallback, index
++
++    def write(self, text):
++        outputs = _OUTPUT.get()
++        return (outputs[self.index] if outputs else self.fallback).write(text)
++
++    def flush(self):
++        outputs = _OUTPUT.get()
++        return (outputs[self.index] if outputs else self.fallback).flush()
++
++    def __getattr__(self, name):
++        return getattr(self.fallback, name)
++
++
++def route_native_output():
++    sys.stdout = _ContextStream(sys.stdout, 0)
++    sys.stderr = _ContextStream(sys.stderr, 1)
++
++
++def native_executor(runtime, plugin, name, description, setup_fn, handler_fn):
++    if not callable(setup_fn) or (handler_fn is not None and not callable(handler_fn)):
++        raise TypeError("Native CLI setup and handler must be callable")
++
++    def execute_on_main(argv, common, capability):
++        token = _OUTPUT.set(tuple(_RemoteOutput(runtime, plugin, capability, stream) for stream in (0, 1)))
++        try:
++            parser = argparse.ArgumentParser(
++                prog=f"hermes {name}", description=description,
++                formatter_class=argparse.RawDescriptionHelpFormatter,
++            )
++            setup_fn(parser)
++            args = parser.parse_args(argv, namespace=argparse.Namespace(**common))
++            handler = handler_fn if handler_fn is not None else getattr(args, "func", None)
++            if not callable(handler):
++                parser.error("this command has no handler")
++            result = runtime._run(handler(args))
++            return result if type(result) is int else 0
++        except SystemExit as exc:
++            if type(exc.code) is int:
++                return exc.code
++            if exc.code is not None:
++                sys.stderr.write(str(exc.code) + "\n")
++                return 1
++            return 0
++        finally:
++            _OUTPUT.reset(token)
++
++    def execute(argv, common, capability):
++        return runtime.native_cli.call(lambda: execute_on_main(argv, common, capability))
++
++    return execute
++
++
++def register_native_cli(host, params):
++    ctx = host._plugin_ctx(params)
++    name, help_text, description = params.get("name"), params.get("help"), params.get("description", "")
++    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", name):
++        raise PluginHostUnsupported("Invalid hosted native CLI command name")
++    if not isinstance(help_text, str) or len(help_text) > 16384 or not isinstance(description, str) or len(description) > 65536:
++        raise PluginHostUnsupported("Invalid hosted native CLI help")
++    refs = params.get("args")
++    if not isinstance(refs, list) or len(refs) != 1 or not isinstance(refs[0], dict):
++        raise PluginHostUnsupported("Hosted native CLI executor is missing")
++    ref = refs[0].get("__callable__")
++    if type(ref) is not int or ref <= 0:
++        raise PluginHostUnsupported("Invalid hosted native CLI executor")
++    generation = host._generation
++
++    def setup(parser):
++        parser.add_argument("_plugin_argv", nargs=argparse.REMAINDER)
++
++    def run(args):
++        common = {key: value for key, value in vars(args).items() if key not in {"func", "_plugin_argv"}}
++        capability = secrets.token_urlsafe(32)
++        host._native_cli_outputs[capability] = (ctx.plugin_id, generation, (sys.stdout, sys.stderr))
++        try:
++            result = host._call("invoke", {
++                "ref": ref, "args": encode([args._plugin_argv, common, capability]), "kwargs": {},
++            }, generation=generation)
++        finally:
++            host._native_cli_outputs.pop(capability, None)
++        if type(result) is not int:
++            raise PluginHostUnsupported("Invalid hosted native CLI result; mutation outcome may be unknown")
++        return result
++
++    handle = ctx.register_cli_command(name, help_text, setup, run, description)
++    entry = ctx._manager._cli_commands.get(name)
++    if entry is not None and entry.get("plugin_key") == ctx.plugin_id:
++        entry["raw_argv"] = True
++    return host._encode_for_host(handle)
++
++
++def write_native_output(host, params):
++    slot = host._native_cli_outputs.get(params.get("capability"))
++    stream, text = params.get("stream"), params.get("text")
++    if slot is None or slot[:2] != (params.get("plugin"), host._generation):
++        raise PluginHostUnsupported("Native CLI output capability is not active for this plugin")
++    if type(stream) is not int or stream not in (0, 1) or not isinstance(text, str) or len(text.encode("utf-8")) > _MAX_WRITE:
++        raise PluginHostUnsupported("Invalid native CLI output")
++    destination = slot[2][stream]
++    destination.write(text)
++    if params.get("flush") is True:
++        destination.flush()
+diff --git a/hermes_cli/plugin_host_containment.py b/hermes_cli/plugin_host_containment.py
+new file mode 100644
+index 0000000..1cfbae3
+--- /dev/null
++++ b/hermes_cli/plugin_host_containment.py
+@@ -0,0 +1,24 @@
++"""Contain an ambiguous timed-out RPC without invoking plugin cleanup or replay."""
++
++
++def contain_deadline(host, channel):
++    # Match the transport object, not a PID or the current generation guessed
++    # after the deadline. A late failure must never kill a replacement process.
++    with host._lock:
++        if host._channel is not channel:
++            return
++        host._deadline_failed = True
++        host._stopping = True
++        process = host._proc
++        host._generation += 1  # immediately fail accepted-policy revalidation
++    # Revoke capabilities before process cleanup; late callback results cannot
++    # publish authority even if the callback itself cannot be cancelled.
++    host._request_operations.shutdown()
++    # Do not send shutdown: the event loop may be blocked or ignore cancellation.
++    # Kill only this direct Popen handle, never its group/tree: independently
++    # owned native services must survive an API transport failure.
++    if process is not None:
++        if process.poll() is None:
++            process.kill()
++        process.wait(timeout=3)
++    channel.close('plugin RPC deadline; outcome unknown; no automatic replay')
+diff --git a/hermes_cli/plugin_host_wire.py b/hermes_cli/plugin_host_wire.py
+index 7d06d0d..644625c 100644
+--- a/hermes_cli/plugin_host_wire.py
++++ b/hermes_cli/plugin_host_wire.py
+@@ -1,8 +1,8 @@
+ """Wire format for the plugin host: framed JSON-RPC in both directions plus a value codec.
+ 
+ Either side can call the other while a call is in flight (a host tool handler calling
+-``ctx.dispatch_tool`` re-enters the parent), so every request is served on its own thread (nested
+-re-entry can go arbitrarily deep; a bounded pool would deadlock) and every outgoing request made
++``ctx.dispatch_tool`` re-enters the parent), so each request is served on its own thread, with a bounded admission limit that
++fails closed rather than queuing recursive work into a deadlocked pool. Every outgoing request made
+ while serving one names it as ``origin``. The origin is a ContextVar, so it follows the work onto
+ event-loop tasks and ``to_thread`` hops. The parent uses that to run a
+ nested request in the caller's contextvars (profile home, secret scope, session) instead of the
+@@ -23,6 +23,9 @@
+ import itertools
+ import json
+ import logging
++import os
++import select
++import time
+ import threading
+ from concurrent.futures import Future
+ from pathlib import PurePath
+@@ -44,6 +47,10 @@
+ 
+ class PluginHostUnavailable(RuntimeError):
+     """The channel is closed: the host process exited or was never started."""
++
++
++class PluginHostDeadline(TimeoutError):
++    """Local transport deadline, distinct from a remote plugin's TimeoutError."""
+ 
+ 
+ class PluginHostUnsupported(RuntimeError):
+@@ -204,6 +211,14 @@
+         self._handler, self._name, self._on_close = handler, name, on_close
+         self._context_for_origin = context_for_origin
+         self._write_lock = threading.Lock()
++        self._incoming = threading.BoundedSemaphore(64)
++        self._writer_fd = None
++        if os.name == 'posix':
++            try:
++                self._writer_fd = writer.fileno()
++                os.set_blocking(self._writer_fd, False)
++            except (AttributeError, OSError, ValueError):
++                self._writer_fd = None
+         self._ids = itertools.count(1)
+         self._pending: dict[int, Future] = {}
+         self._pending_lock = threading.Lock()
+@@ -226,37 +241,65 @@
+     def request(self, method: str, params: dict[str, Any], *, timeout: Optional[float] = None) -> Any:
+         if self._closed_reason is not None:
+             raise PluginHostUnavailable(self._closed_reason)
++        deadline = time.monotonic() + (30.0 if timeout is None else timeout)
+         request_id = next(self._ids)
+         future: Future = Future()
+         with self._pending_lock:
++            if len(self._pending) >= 64:
++                raise PluginHostUnavailable('plugin channel busy')
+             self._pending[request_id] = future
+         self._contexts[request_id] = contextvars.copy_context()
+         message = {"id": request_id, "method": method, "params": params,
+                    "origin": _SERVING.get()}
+         try:
+-            self._send(message)
+-            return future.result(timeout=timeout)
++            self._send(message, deadline=deadline)
++            return future.result(timeout=None if timeout is None else max(0, deadline - time.monotonic()))
++        except TimeoutError as exc:
++            raise PluginHostDeadline('plugin RPC deadline; outcome unknown') from exc
+         finally:
+             with self._pending_lock:
+                 self._pending.pop(request_id, None)
+             self._contexts.pop(request_id, None)
+ 
+-    def _send(self, message: dict[str, Any]) -> None:
++    def _send(self, message: dict[str, Any], *, deadline=None) -> None:
+         data = (json.dumps(message, separators=(",", ":"), allow_nan=True) + "\n").encode("utf-8")
+-        with self._write_lock:
++        if len(data) > 8 * 1024 * 1024:
++            raise ValueError('plugin frame too large')
++        deadline = time.monotonic() + 30 if deadline is None else deadline
++        if not self._write_lock.acquire(timeout=max(0, deadline - time.monotonic())):
++            raise TimeoutError('plugin channel write deadline')
++        try:
+             if self._closed_reason is not None:
+                 raise PluginHostUnavailable(self._closed_reason)
+-            try:
++            if self._writer_fd is None:
+                 self._writer.write(data)
+                 self._writer.flush()
+-            except (BrokenPipeError, OSError, ValueError) as exc:
+-                self._close(f"{self._name} channel write failed: {exc}")
+-                raise PluginHostUnavailable(self._closed_reason or str(exc)) from exc
++                return
++            view = memoryview(data)
++            while view:
++                remaining = deadline - time.monotonic()
++                if remaining <= 0 or not select.select([], [self._writer_fd], [], remaining)[1]:
++                    # A partial JSON frame cannot be safely reused or replayed.
++                    self._close('plugin channel write deadline')
++                    raise TimeoutError('plugin channel write deadline')
++                try:
++                    sent = os.write(self._writer_fd, view)
++                except BlockingIOError:
++                    continue
++                view = view[sent:]
++        except (BrokenPipeError, OSError, ValueError) as exc:
++            self._close(f"{self._name} channel write failed: {type(exc).__name__}")
++            raise PluginHostUnavailable(self._closed_reason) from exc
++        finally:
++            self._write_lock.release()
+ 
+     def _read_loop(self) -> None:
+         reason = f"{self._name} channel closed"
+         try:
+-            for line in iter(self._reader.readline, b""):
++            for line in iter(lambda: self._reader.readline(8 * 1024 * 1024 + 1), b""):
++                if len(line) > 8 * 1024 * 1024:
++                    reason = 'plugin frame too large'
++                    break
+                 if not line.strip():
+                     continue
+                 try:
+@@ -265,7 +308,10 @@
+                     logger.warning("%s: dropped a malformed frame: %.200r", self._name, line)
+                     continue
+                 if "method" in message:
+-                    threading.Thread(target=self._serve, args=(message,), daemon=True,
++                    if not self._incoming.acquire(blocking=False):
++                        reason = 'plugin channel busy'
++                        break
++                    threading.Thread(target=self._serve_bounded, args=(message,), daemon=True,
+                                      name=f"{self._name}-rpc").start()
+                     continue
+                 with self._pending_lock:
+@@ -275,6 +321,12 @@
+         except (OSError, ValueError) as exc:
+             reason = f"{self._name} channel read failed: {exc}"
+         self._close(reason)
++
++    def _serve_bounded(self, message):
++        try:
++            self._serve(message)
++        finally:
++            self._incoming.release()
+ 
+     def _serve(self, message: dict[str, Any]) -> None:
+         request_id = message.get("id")
+diff --git a/hermes_cli/plugin_isolation.py b/hermes_cli/plugin_isolation.py
+index 7a4d1ef..96dc534 100644
+--- a/hermes_cli/plugin_isolation.py
++++ b/hermes_cli/plugin_isolation.py
+@@ -41,11 +41,8 @@
+     "register_approval_transport": "approval transports hold the live approval request/response channel",
+ }
+ 
+-# Registered in-process only; skipped (with a warning, the plugin still loads) inside the host
+-# because the surface they extend does not exist in a server process.
+-HOST_SKIPPED_CTX_METHODS: dict[str, str] = {
+-    "register_cli_command": "`hermes <command>` subcommands are wired into the local CLI parser",
+-}
++# Native CLI registration forwards argv; its parser and handler remain in the host.
++HOST_SKIPPED_CTX_METHODS: dict[str, str] = {}
+ 
+ # Live ctx facades the host reaches by method call; each call returns plain data.
+ HOST_REMOTE_FACADES: frozenset[str] = frozenset({"state", "llm", "platform_actions", "subagent_lifecycle"})
+diff --git a/hermes_cli/plugin_operation_authority.py b/hermes_cli/plugin_operation_authority.py
+new file mode 100644
+index 0000000..5f44850
+--- /dev/null
++++ b/hermes_cli/plugin_operation_authority.py
+@@ -0,0 +1,111 @@
++"""Private hosted request capabilities; never serialize these to a renderer.
++
++The child can request acceptance only through a capability created for the
++current authenticated request. Home, principal and policy are parent-owned.
++Plugin-specific operation policy remains an additional mandatory check.
++"""
++import hashlib
++import secrets
++import threading
++from dataclasses import asdict
++
++from hermes_cli.plugin_selection_authority import Selection
++
++
++class RequestOperations:
++    def __init__(self, authority):
++        self.authority = authority
++        self.lock = threading.RLock()
++        self.requests = {}
++        self.operations = {}
++        self.operation_plugins = {}
++        self.request_acceptances = {}
++
++    def open(self, context, plugin, method, path, body, policy):
++        selection = context.get('selection') if context else None
++        if selection is None:
++            return None
++        with self.lock:
++            if len(self.requests) >= 64:
++                raise ValueError('BUSY')
++            token = secrets.token_hex(32)
++            self.requests[token] = (Selection(**selection), plugin,
++                method.upper() + ':' + path, hashlib.sha256(body).hexdigest(), policy)
++            return token
++
++    def close(self, token, *, failed=False):
++        with self.lock:
++            self.requests.pop(token, None)
++            acceptances = self.request_acceptances.pop(token, set())
++            if failed:
++                for cap in acceptances:
++                    accepted = self.operations.pop(cap, None)
++                    self.operation_plugins.pop(cap, None)
++                    if accepted is not None:
++                        self.authority.retire(accepted[0])
++
++    def shutdown(self, plugin=None):
++        with self.lock:
++            for token, (record, _) in list(self.operations.items()):
++                if plugin is None or self.operation_plugins.get(token) == plugin:
++                    self.authority.retire(record)
++                    del self.operations[token]
++                    self.operation_plugins.pop(token, None)
++            for token, request in list(self.requests.items()):
++                if plugin is None or request[1] == plugin:
++                    del self.requests[token]
++                    self.request_acceptances.pop(token, None)
++
++    def call(self, params):
++        token = params.get('capability')
++        verb = params.get('verb')
++        # Policy may touch the filesystem or block. Never run it holding the
++        # capability lock (or the shared selection authority lock). Shutdown
++        # removes these exact entries while the callback is still in flight.
++        with self.lock:
++            request = self.requests.get(token) if verb == 'accept' else None
++            accepted = self.operations.get(token) if verb == 'revalidate' else None
++        policy = request[4] if request is not None else accepted[1] if accepted is not None else None
++        allowed = self.authority._allowed(policy) if policy is not None else False
++        with self.lock:
++            if verb == 'accept' and (request is None or self.requests.get(token) is not request):
++                raise ValueError('STALE_SCOPE')
++            if verb == 'revalidate' and (accepted is None or self.operations.get(token) is not accepted):
++                return False
++            if params.get('verb') == 'accept':
++                request = self.requests.get(token)
++                if request is None:
++                    raise ValueError('STALE_SCOPE')
++                selection, plugin, action, digest, policy = request
++                if action.split(':', 1)[0] not in {'POST', 'PUT', 'PATCH', 'DELETE'}:
++                    raise ValueError('INVALID_INPUT')
++                # Namespace IDs so two plugins cannot collide or query each other.
++                operation_id = params.get('operation_id')
++                if not isinstance(operation_id, str) or not 1 <= len(operation_id) <= 128:
++                    raise ValueError('INVALID_INPUT')
++                internal_id = hashlib.sha256((plugin + '\0' + operation_id).encode()).hexdigest()
++                record = self.authority.accept(selection, internal_id, params.get('revision'),
++                    lambda: allowed, action=action, payload_digest=digest)
++                key = (record.selection.principal, record.operation_id)
++                for capability, (existing, _) in self.operations.items():
++                    if (existing.selection.principal, existing.operation_id) == key:
++                        # An idempotent lookup does not own the original grant.
++                        # Failure of this response must not cancel accepted work.
++                        return {'capability': capability, 'record': asdict(existing)}
++                if len(self.operations) >= 100:
++                    raise ValueError('BUSY')
++                capability = secrets.token_hex(32)
++                self.operations[capability] = (record, policy)
++                self.operation_plugins[capability] = plugin
++                self.request_acceptances.setdefault(token, set()).add(capability)
++                return {'capability': capability, 'record': asdict(record)}
++            if params.get('verb') == 'retire':
++                accepted = self.operations.pop(token, None)
++                self.operation_plugins.pop(token, None)
++                for req_caps in self.request_acceptances.values():
++                    req_caps.discard(token)
++                return bool(accepted and self.authority.retire(accepted[0]))
++            if params.get('verb') == 'revalidate':
++                accepted = self.operations.get(token)
++                return bool(accepted and self.authority.revalidate(accepted[0], lambda: allowed))
++            raise ValueError('INVALID_INPUT')
+diff --git a/hermes_cli/plugin_policy_epoch.py b/hermes_cli/plugin_policy_epoch.py
+new file mode 100644
+index 0000000..bee0c6c
+--- /dev/null
++++ b/hermes_cli/plugin_policy_epoch.py
+@@ -0,0 +1,131 @@
++"""Durable per-plugin revocation epochs for Hermes-mediated config writes.
++
++Epoch publication precedes config publication. A failed write may revoke an old
++owner conservatively; it cannot restore authority. External writers that bypass
++these APIs do not provide an unobserved disable/re-enable history.
++"""
++from collections.abc import Mapping
++from contextlib import contextmanager
++import json
++import os
++from pathlib import Path
++import re
++import secrets
++import stat
++
++from pm.filesystem import durable_write_bytes, lock_fd
++
++
++_LIMIT = 1024 * 1024
++_NAME = '.plugin-policy-epochs.json'
++_TOKEN = re.compile(r'[a-f0-9]{64}')
++
++
++def _home(home):
++    path = Path(home)
++    if not path.is_absolute() or path.resolve() != path:
++        raise ValueError('Invalid plugin policy home')
++    return path
++
++
++def _read(home):
++    path = home / _NAME
++    try:
++        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
++    except FileNotFoundError:
++        return {}
++    with os.fdopen(fd, 'rb') as stream:
++        info = os.fstat(stream.fileno())
++        if not stat.S_ISREG(info.st_mode) or info.st_size > _LIMIT or path.is_symlink():
++            raise ValueError('Invalid plugin policy epoch file')
++        if os.name != 'nt' and (info.st_uid != os.getuid() or info.st_mode & 0o077):
++            raise ValueError('Plugin policy epochs must be private')
++        raw = stream.read(_LIMIT + 1)
++    if len(raw) > _LIMIT:
++        raise ValueError('Plugin policy epoch file is too large')
++    record = json.loads(raw)
++    epochs = record.get('epochs') if isinstance(record, dict) else None
++    if (not isinstance(record, dict) or record.get('version') != 1 or
++            not isinstance(epochs, dict) or
++            any(not isinstance(key, str) or not isinstance(token, str) or
++                not _TOKEN.fullmatch(token) for key, token in epochs.items())):
++        raise ValueError('Invalid plugin policy epochs')
++    return epochs
++
++
++def read_policy_epoch(home, plugin_key):
++    """Return an opaque epoch without creating or repairing policy state."""
++    try:
++        return _read(_home(home)).get(plugin_key)
++    except (OSError, ValueError, TypeError):
++        return None
++
++
++def _section(config):
++    if not isinstance(config, Mapping):
++        raise ValueError('Plugin policy config must be a mapping')
++    plugins = config.get('plugins') or {}
++    if not isinstance(plugins, Mapping):
++        raise ValueError('Plugin policy must be a mapping')
++    enabled, disabled = plugins.get('enabled', []), plugins.get('disabled', [])
++    entries = plugins.get('entries') or {}
++    if (not isinstance(enabled, list) or not isinstance(disabled, list) or
++            not isinstance(entries, Mapping) or
++            any(not isinstance(key, str) for key in [*enabled, *disabled, *entries])):
++        raise ValueError('Invalid plugin policy selection')
++    return plugins, set(enabled), set(disabled), entries
++
++
++def _projection(section, key):
++    plugins, enabled, disabled, entries = section
++    return (key in enabled, key in disabled, key in entries, entries.get(key),
++            plugins.get('isolation'), plugins.get('host'))
++
++
++@contextmanager
++def _locked(home):
++    path = home / '.plugin-policy-epochs.lock'
++    fd = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0), 0o600)
++    try:
++        info = os.fstat(fd)
++        if not stat.S_ISREG(info.st_mode) or path.is_symlink():
++            raise ValueError('Invalid plugin policy lock')
++        if os.name != 'nt' and (info.st_uid != os.getuid() or info.st_mode & 0o077):
++            raise ValueError('Plugin policy lock must be private')
++        if info.st_size == 0:
++            os.write(fd, b'\0')
++        if not lock_fd(fd, wait=True, timeout=2):
++            raise TimeoutError('Plugin policy epoch publication timed out')
++        yield
++    finally:
++        os.close(fd)
++
++
++def record_policy_write(home, previous, proposed):
++    """Initialize epochs and revoke only plugins whose policy changes."""
++    home = _home(home)
++    before, after = _section(previous), _section(proposed)
++    keys = before[1] | before[2] | set(before[3]) | after[1] | after[2] | set(after[3])
++    if not keys and not (home / _NAME).exists():
++        return
++    home.mkdir(parents=True, exist_ok=True)
++    with _locked(home):
++        epochs = _read(home)
++        changed = False
++        for key in keys | set(epochs):
++            if key not in epochs or _projection(before, key) != _projection(after, key):
++                epochs[key] = secrets.token_hex(32)
++                changed = True
++        if changed:
++            raw = (json.dumps({'version': 1, 'epochs': epochs}, sort_keys=True) + '\n').encode()
++            if len(raw) > _LIMIT:
++                raise ValueError('Plugin policy epoch file is too large')
++            durable_write_bytes(home / _NAME, raw)
++
++
++def record_policy_bytes(home, previous, proposed):
++    """Apply the same write contract to PM's serialized config publication."""
++    from hermes_yaml import safe_load
++    before = safe_load(previous.decode('utf-8-sig')) if previous else {}
++    after = safe_load(proposed.decode('utf-8-sig')) if proposed else {}
++    record_policy_write(home, before or {}, after or {})
+diff --git a/hermes_cli/plugin_policy_incarnation.py b/hermes_cli/plugin_policy_incarnation.py
+new file mode 100644
+index 0000000..f7a43ce
+--- /dev/null
++++ b/hermes_cli/plugin_policy_incarnation.py
+@@ -0,0 +1,36 @@
++"""Pin private operation authority to the policy/package filesystem incarnation.
++
++Boolean enablement sampling misses disable/re-enable between checks. Until a
++policy-specific durable revision exists, any policy rewrite conservatively
++invalidates accepted work, even when the final bytes equal the original bytes.
++Selection changes do not write these files and therefore do not revoke work.
++"""
++from pathlib import Path
++import stat as stat_module
++
++
++def policy_incarnation(home, dashboard_dir, api_file):
++    from hermes_cli.managed_scope import get_managed_dir
++
++    dashboard = Path(dashboard_dir)
++    paths = [Path(home), Path(home) / 'config.yaml', dashboard.parent,
++             dashboard / 'manifest.json', dashboard / api_file]
++    managed = get_managed_dir()
++    if managed is not None:
++        paths.extend((Path(managed), Path(managed) / 'config.yaml'))
++    result: list[object] = [str(managed) if managed is not None else None]
++    for path in paths:
++        try:
++            stat = path.lstat()
++        except FileNotFoundError:
++            result.append(None)
++        else:
++            # ctime catches in-place ABA even if mtime and contents are restored;
++            # inode/device catch atomic replacements and package reincarnations.
++            if stat_module.S_ISDIR(stat.st_mode):
++                # Creating unrelated state beneath a home is not policy revocation.
++                result.append((stat.st_dev, stat.st_ino, stat.st_mode))
++            else:
++                result.append((stat.st_dev, stat.st_ino, stat.st_mode, stat.st_size,
++                               stat.st_mtime_ns, stat.st_ctime_ns))
++    return tuple(result)
+diff --git a/hermes_cli/plugin_request_context.py b/hermes_cli/plugin_request_context.py
+new file mode 100644
+index 0000000..9173aa5
+--- /dev/null
++++ b/hermes_cli/plugin_request_context.py
+@@ -0,0 +1,65 @@
++"""Safe authenticated identity projection for hosted dashboard plugins.
++
++Only the server may construct this metadata. It travels on the private host
++channel, not in HTTP headers, and deliberately contains no bearer credentials.
++Selection authorization is separate; this projection alone cannot authorize a
++selection-sensitive mutation.
++"""
++import hashlib
++import secrets
++import re
++from dataclasses import asdict
++
++from hermes_cli.plugin_selection_authority import SelectionAuthority
++
++from fastapi import HTTPException
++
++from hermes_constants import get_hermes_home
++
++_PROCESS_INCARNATION = secrets.token_hex(16)
++_AUTHORITY = SelectionAuthority()
++
++
++def bind_selection(request, context, *, select_current=False, deselect=False):
++    """Host authenticates and resolves home first; HTTP cannot supply either."""
++    client = request.headers.get('X-Hermes-Plugin-Client', '')
++    if not re.fullmatch(r'[a-zA-Z0-9_-]{16,128}', client):
++        raise HTTPException(status_code=409, detail='STALE_SCOPE')
++    try:
++        if deselect:
++            selected = _AUTHORITY.deselect(context['principal'], client,
++                request.headers.get('X-Hermes-Plugin-Scope'),
++                request.headers.get('X-Hermes-Plugin-Epoch'))
++        elif select_current:
++            selected = _AUTHORITY.select(context['principal'], client,
++                                         context['host_incarnation'], context['home'],
++                                         expected_epoch=request.headers.get('X-Hermes-Plugin-Epoch', '0'))
++        else:
++            selected = _AUTHORITY.resolve(context['principal'], client,
++                request.headers.get('X-Hermes-Plugin-Scope'),
++                request.headers.get('X-Hermes-Plugin-Epoch'))
++            if selected.home != context['home'] or selected.connection != context['host_incarnation']:
++                raise ValueError('STALE_SCOPE')
++    except ValueError as exc:
++        raise HTTPException(status_code=409, detail=str(exc)) from None
++    return {**context, 'selection': asdict(selected)}
++
++
++
++def authenticated_context(request):
++    from hermes_cli.web_server import _has_valid_session_token
++
++    principal = getattr(request.state, 'token_principal', None)
++    session = getattr(request.state, 'session', None)
++    if getattr(request.state, 'token_authenticated', False) and principal is not None:
++        identity = (principal.provider, principal.principal)
++    elif session is not None:
++        identity = (session.provider, session.user_id)
++    elif _has_valid_session_token(request):
++        identity = ('local-session', _PROCESS_INCARNATION)
++    else:
++        raise HTTPException(status_code=401, detail='Unauthorized')
++    home = str(get_hermes_home().resolve())
++    digest = hashlib.sha256(('\0'.join(identity)).encode()).hexdigest()
++    return {'version': 1, 'principal': digest, 'home': home,
++            'host_incarnation': _PROCESS_INCARNATION}
+diff --git a/hermes_cli/plugin_selection_authority.py b/hermes_cli/plugin_selection_authority.py
+new file mode 100644
+index 0000000..c2b1576
+--- /dev/null
++++ b/hermes_cli/plugin_selection_authority.py
+@@ -0,0 +1,128 @@
++"""Host-owned selection and immutable acceptance records.
++
++Caller authenticates the principal and resolves home before calling select.
++Policy callbacks must be local bounded reads, not remote network calls.
++"""
++from dataclasses import dataclass
++import re
++import secrets
++import threading
++
++
++@dataclass(frozen=True)
++class Selection:
++    principal: str
++    client: str
++    connection: str
++    home: str
++    epoch: int
++    scope_id: str
++
++
++@dataclass(frozen=True)
++class AcceptedOperation:
++    operation_id: str
++    selection: Selection
++    revision: str
++    action: str
++    payload_digest: str
++
++
++class SelectionAuthority:
++    def __init__(self):
++        self._lock = threading.RLock()
++        self._selections = {}
++        self._accepted = {}
++        self._revoked = set()
++        self._epoch = 0
++
++    def select(self, principal, client, connection, home, *, expected_epoch=None):
++        with self._lock:
++            key = principal, client
++            if key not in self._selections and len(self._selections) >= 256:
++                raise ValueError('BUSY')
++            previous = self._selections.get(key)
++            if expected_epoch is not None and str(previous.epoch if previous else 0) != str(expected_epoch):
++                raise ValueError('STALE_SCOPE')
++            if previous and (previous.connection, previous.home) == (connection, home):
++                return previous
++            self._epoch += 1
++            selected = Selection(principal, client, connection, home,
++                                 self._epoch, secrets.token_hex(16))
++            self._selections[key] = selected
++            return selected
++
++    def resolve(self, principal, client, scope_id, epoch):
++        """Resolve a client assertion without allowing it to choose a home."""
++        with self._lock:
++            selected = self._selections.get((principal, client))
++            if selected is None or selected.scope_id != scope_id or str(selected.epoch) != str(epoch):
++                raise ValueError('STALE_SCOPE')
++            return selected
++
++    def deselect(self, principal, client, scope_id, epoch):
++        with self._lock:
++            previous = self.resolve(principal, client, scope_id, epoch)
++            self._epoch += 1
++            # Retain a tombstone epoch for CAS; accepted records are untouched.
++            selected = Selection(principal, client, previous.connection, '',
++                                 self._epoch, secrets.token_hex(16))
++            self._selections[(principal, client)] = selected
++            return selected
++
++    def current(self, selection):
++        with self._lock:
++            return self._selections.get((selection.principal, selection.client)) == selection
++
++    def accept(self, selection, operation_id, revision, policy, *, action, payload_digest):
++        with self._lock:
++            if (not isinstance(operation_id, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,128}', operation_id)
++                    or not isinstance(action, str) or not re.fullmatch(r'[a-zA-Z0-9_./:-]{1,256}', action)
++                    or not isinstance(payload_digest, str) or not re.fullmatch('[a-f0-9]{64}', payload_digest)):
++                raise ValueError('INVALID_INPUT')
++            if not self.current(selection):
++                raise ValueError('STALE_SCOPE')
++            if not isinstance(revision, str) or not re.fullmatch('[a-f0-9]{64}', revision):
++                raise ValueError('STALE_REVISION')
++            if not self._allowed(policy):
++                raise ValueError('POLICY_LOCKED')
++            key = selection.principal, operation_id
++            if key in self._revoked:
++                raise ValueError('POLICY_LOCKED')
++            record = AcceptedOperation(operation_id, selection, revision, action, payload_digest)
++            previous = self._accepted.get(key)
++            if previous is not None:
++                if previous != record:
++                    raise ValueError('CONFLICT')
++                return previous
++            if len(self._accepted) >= 100:
++                raise ValueError('BUSY')
++            self._accepted[key] = record
++            return record
++
++    def retire(self, operation):
++        """Release this exact acceptance; an old handle cannot retire a reuse."""
++        with self._lock:
++            key = operation.selection.principal, operation.operation_id
++            if self._accepted.get(key) is not operation:
++                return False
++            del self._accepted[key]
++            self._revoked.discard(key)
++            return True
++
++    @staticmethod
++    def _allowed(policy):
++        try:
++            return policy() is True
++        except Exception:
++            return False
++
++    def revalidate(self, operation, policy):
++        with self._lock:
++            key = operation.selection.principal, operation.operation_id
++            if self._accepted.get(key) is not operation or key in self._revoked:
++                return False
++            if not self._allowed(policy):
++                self._revoked.add(key)
++                return False
++            return True
+diff --git a/hermes_cli/runtime_provider_custom.py b/hermes_cli/runtime_provider_custom.py
+index 698f0ed..2410f0a 100644
+--- a/hermes_cli/runtime_provider_custom.py
++++ b/hermes_cli/runtime_provider_custom.py
+@@ -548,7 +548,9 @@
+     base_url = ((explicit_base_url or "").strip() or custom_provider.get("base_url", "")).rstrip("/")
+     if not base_url:
+         return None
+-    pool_result = rp._try_resolve_from_custom_pool(
++    # A command-backed provider owns its authentication path. A same-origin
++    # legacy pool must not bypass revocation or substitute a static credential.
++    pool_result = None if custom_provider.get("key_cmd") else rp._try_resolve_from_custom_pool(
+         base_url, "custom", custom_provider.get("api_mode"),
+         provider_name=custom_provider.get("provider_key") or custom_provider.get("name"),
+     )
+diff --git a/hermes_cli/web_server_dashboard.py b/hermes_cli/web_server_dashboard.py
+index c396ada..fba7d62 100644
+--- a/hermes_cli/web_server_dashboard.py
++++ b/hermes_cli/web_server_dashboard.py
+@@ -552,6 +552,7 @@
+         "source": source,
+         "_dir": str(dashboard_dir),
+         "_api_file": safe_api,
++        "_trusted_context": data.get("request_context") == 1,
+     }
+ 
+ 
+@@ -830,10 +831,24 @@
+         if target is None:
+             return JSONResponse({"detail": f"plugin {name!r} is not enabled in this profile"}, status_code=404)
+         host, dashboard_dir, api_file = target
++        from hermes_cli.plugin_request_context import authenticated_context, bind_selection
++        context = authenticated_context(request) if plugin.get('_trusted_context') else None
++        if context is not None and path in ('_host/selection', '_host/deselection') and request.method == 'POST':
++            selected = bind_selection(request, context, select_current=True,
++                                      deselect=path == '_host/deselection')['selection']
++            return JSONResponse({'scope_id': selected['scope_id'], 'epoch': selected['epoch']},
++                                headers={'Cache-Control': 'no-store'})
++        if context is not None and request.headers.get('X-Hermes-Plugin-Client'):
++            context = bind_selection(request, context)
++        body = bytearray()
++        async for chunk in request.stream():
++            body.extend(chunk)
++            if len(body) > 1024 * 1024:
++                return JSONResponse({'detail': 'Plugin request too large'}, status_code=413)
+         result = await asyncio.to_thread(
+             host.asgi_request, name, dashboard_dir, api_file, request.method, "/" + path,
+             request.url.query, [(k, v) for k, v in request.headers.items() if k.lower() != "host"],
+-            await request.body())
++            bytes(body), trusted_context=context)
+         response = Response(content=result["body"], status_code=int(result["status"]))
+         for key, value in result["headers"]:  # a list, so repeated headers (Set-Cookie) all survive
+             if key.lower() not in {"content-length", "transfer-encoding", "connection"}:
+diff --git a/pm/plugin_eviction.py b/pm/plugin_eviction.py
+index 093ea88..d33a6f8 100644
+--- a/pm/plugin_eviction.py
++++ b/pm/plugin_eviction.py
+@@ -121,7 +121,9 @@
+                            for path, previous, proposed in self.edits],
+                "facts_before": file_digest(runtime_facts_path(project))}
+         durable_write_bytes(install_state_dir(project) / "publication.json", json.dumps(row).encode())
+-        for path, _previous, proposed in self.edits:
++        from hermes_cli.plugin_policy_epoch import record_policy_bytes
++        for path, previous, proposed in self.edits:
++            record_policy_bytes(path.parent, previous, proposed)
+             durable_write_bytes(path, proposed)
+ 
+ 
+diff --git a/pm/publication.py b/pm/publication.py
+index 3ea1c7d..9b0f6e2 100644
+--- a/pm/publication.py
++++ b/pm/publication.py
+@@ -98,6 +98,8 @@
+                "facts_before": file_digest(runtime_facts_path(project)),
+                "config_after": hashlib.sha256(self.proposed).hexdigest()}
+         durable_write_bytes(install_state_dir(project) / "publication.json", json.dumps(row).encode())
++        from hermes_cli.plugin_policy_epoch import record_policy_bytes
++        record_policy_bytes(self.home, self.previous, self.proposed)
+         durable_write_bytes(self.path, self.proposed)
+ 
+ 
+diff --git a/tests/hermes_cli/test_coalesce_session_args.py b/tests/hermes_cli/test_coalesce_session_args.py
+index 0906d2d..2e01d1f 100644
+--- a/tests/hermes_cli/test_coalesce_session_args.py
++++ b/tests/hermes_cli/test_coalesce_session_args.py
+@@ -21,12 +21,16 @@
+     # ── combined flags ───────────────────────────────────────────────────
+ 
+ 
+-    # ── passthrough (no session flags) ───────────────────────────────────
++    def test_option_value_matching_raw_command_does_not_stop_merging(self):
++        assert _coalesce_session_name_args(
++            ["--in", "cpa", "--resume", "Alpha", "Beta"], raw_commands={"cpa"}
++        ) == ["--in", "cpa", "--resume", "Alpha Beta"]
+ 
+-    def test_no_session_flags_passthrough(self):
+-        """hermes -w chat -q hello (nothing to merge)"""
+-        result = _coalesce_session_name_args(["-w", "chat", "-q", "hello"])
+-        assert result == ["-w", "chat", "-q", "hello"]
++    def test_raw_command_keeps_its_own_resume_arguments(self):
++        assert _coalesce_session_name_args(
++            ["--resume", "Alpha", "Beta", "cpa", "probe", "-r", "one", "two"],
++            raw_commands={"cpa"},
++        ) == ["--resume", "Alpha Beta", "cpa", "probe", "-r", "one", "two"]
+ 
+ 
+     # ── subcommand boundary ──────────────────────────────────────────────
+diff --git a/tests/hermes_cli/test_plugin_asgi_lifecycle.py b/tests/hermes_cli/test_plugin_asgi_lifecycle.py
+new file mode 100644
+index 0000000..dd23348
+--- /dev/null
++++ b/tests/hermes_cli/test_plugin_asgi_lifecycle.py
+@@ -0,0 +1,172 @@
++"""Real child-process dashboard lifecycle admission and deadline regressions."""
++import json
++import threading
++import time
++from concurrent.futures import ThreadPoolExecutor
++
++import pytest
++
++from hermes_cli.plugins import PluginManager
++
++
++API = '''
++import asyncio
++from pathlib import Path
++from contextlib import asynccontextmanager
++from fastapi import APIRouter
++root = Path(__file__).parent
++@asynccontextmanager
++async def lifespan(app):
++    with (root / 'events').open('a') as out: out.write('start\\n')
++    try:
++        while not (root / 'release-start').exists():
++            await asyncio.sleep(.01)
++        yield
++    finally:
++        with (root / 'events').open('a') as out: out.write('stop\\n')
++router = APIRouter(lifespan=lifespan)
++@router.get('/ping')
++async def ping():
++    return {'ok': True}
++'''
++
++
++def wait_file(path):
++    deadline = time.monotonic() + 5
++    while not path.exists() and time.monotonic() < deadline:
++        threading.Event().wait(.01)
++    assert path.exists()
++
++
++@pytest.fixture
++def hosted(tmp_path, monkeypatch):
++    monkeypatch.setenv('HOME', str(tmp_path))
++    monkeypatch.setenv('HERMES_HOME', str(tmp_path / 'home'))
++    dashboard = tmp_path / 'dashboard'
++    dashboard.mkdir()
++    (dashboard / 'plugin_api.py').write_text(API)
++    host = PluginManager()._plugin_host()
++    # Start the transport before racing requests, so this test targets ASGI admission.
++    host.ensure_started()
++    def ping():
++        result = host.asgi_request('lifecycle', str(dashboard), 'plugin_api.py',
++                                   'GET', '/ping', '', [], b'')
++        return json.loads(result['body'])
++    try:
++        yield host, dashboard, ping
++    finally:
++        (dashboard / 'release-start').touch()
++        host.shutdown()
++        assert not host.alive
++
++
++def test_simultaneous_first_requests_enter_lifespan_once(hosted):
++    host, directory, ping = hosted
++    with ThreadPoolExecutor(max_workers=8) as pool:
++        first = pool.submit(ping)
++        wait_file(directory / 'events')
++        others = [pool.submit(ping) for _ in range(7)]
++        # A separate plugin request is a loop/transport barrier while startup waits.
++        assert host._call('hello', {})['pid'] > 0
++        (directory / 'release-start').touch()
++        assert first.result(timeout=10) == {'ok': True}
++        assert [f.result(timeout=10) for f in others] == [{'ok': True}] * 7
++    host._unload('lifecycle')
++    assert (directory / 'events').read_text() == 'start\nstop\n'
++
++
++def test_startup_timeout_cleans_up_and_can_retry(hosted):
++    host, directory, ping = hosted
++    started = time.monotonic()
++    with pytest.raises(Exception, match='Timeout|timeout|timed out'):
++        ping()
++    assert time.monotonic() - started < 8
++    wait_file(directory / 'events')
++    assert (directory / 'events').read_text() == 'start\nstop\n'
++    (directory / 'release-start').touch()
++    assert ping() == {'ok': True}
++    host._unload('lifecycle')
++    assert (directory / 'events').read_text() == 'start\nstop\nstart\nstop\n'
++
++
++def test_unload_during_startup_drains_then_reloads(hosted):
++    host, directory, ping = hosted
++    with ThreadPoolExecutor(max_workers=2) as pool:
++        first = pool.submit(ping)
++        wait_file(directory / 'events')
++        # Keep startup gated until unload actually completes its RPC. Startup's
++        # bounded cancellation must permit unload without publishing a live app.
++        unloading = pool.submit(host._unload, 'lifecycle')
++        with pytest.raises(Exception, match='timed out'):
++            first.result(timeout=8)
++        unloading.result(timeout=8)
++    assert (directory / 'events').read_text() == 'start\nstop\n'
++    (directory / 'release-start').touch()
++    assert ping() == {'ok': True}
++    host._unload('lifecycle')
++    assert (directory / 'events').read_text() == 'start\nstop\nstart\nstop\n'
++
++
++def test_shutdown_timeout_reports_error_and_allows_other_plugin(hosted):
++    host, directory, ping = hosted
++    (directory / 'plugin_api.py').write_text(API.replace(
++        "with (root / 'events').open('a') as out: out.write('stop\\n')",
++        "await asyncio.sleep(60)"))
++    (directory / 'release-start').touch()
++    assert ping() == {'ok': True}
++    started = time.monotonic()
++    result = host._call('unload', {'plugin_key': 'lifecycle'}, timeout=8)
++    assert time.monotonic() - started < 8
++    assert len(result['errors']) == 1
++    assert result['errors'][0].startswith('TimeoutError:')
++    assert host._call('hello', {})['pid'] > 0
++    with pytest.raises(Exception, match='host restart required'):
++        ping()
++    # Failed cleanup must not create another authority in the same plugin;
++    # unrelated plugins in this host remain available.
++    other = directory.parent / 'other'
++    other.mkdir()
++    (other / 'plugin_api.py').write_text(API)
++    (other / 'release-start').touch()
++    response = host.asgi_request('other', str(other), 'plugin_api.py',
++                                 'GET', '/ping', '', [], b'')
++    assert json.loads(response['body']) == {'ok': True}
++
++
++def test_queued_request_is_invalidated_by_unload(tmp_path):
++    import asyncio
++    from hermes_cli.plugin_host_asgi import DashboardLifetimes
++
++    (tmp_path / 'plugin_api.py').write_text(API)
++    (tmp_path / 'release-start').touch()
++
++    async def exercise():
++        lifetimes = DashboardLifetimes()
++        entered = asyncio.Event()
++        release = asyncio.Event()
++        queued = asyncio.Event()
++        async def first():
++            async with lifetimes.request('probe', tmp_path / 'plugin_api.py'):
++                entered.set()
++                await release.wait()
++        async def stale():
++            queued.set()
++            async with lifetimes.request('probe', tmp_path / 'plugin_api.py'):
++                pytest.fail('queued request survived unload')
++        active = asyncio.create_task(first())
++        await entered.wait()
++        pending = asyncio.create_task(stale())
++        await queued.wait()
++        closing = asyncio.create_task(lifetimes.unload('probe'))
++        # Yield once so unload invalidates admission before releasing the lock.
++        await asyncio.sleep(0)
++        release.set()
++        await active
++        with pytest.raises(RuntimeError, match='stale dashboard request'):
++            await pending
++        assert await closing == []
++        assert (tmp_path / 'events').read_text() == 'start\nstop\n'
++        async with lifetimes.request('probe', tmp_path / 'plugin_api.py'):
++            pass
++        assert await lifetimes.unload('probe') == []
++    asyncio.run(exercise())
+diff --git a/tests/hermes_cli/test_plugin_host_bounds.py b/tests/hermes_cli/test_plugin_host_bounds.py
+new file mode 100644
+index 0000000..ba565a4
+--- /dev/null
++++ b/tests/hermes_cli/test_plugin_host_bounds.py
+@@ -0,0 +1,51 @@
++"""Real pipe backpressure must not consume the RPC deadline indefinitely."""
++import os
++import threading
++import time
++
++import pytest
++
++from hermes_cli.plugin_host_wire import Channel, PluginHostUnavailable
++
++
++def test_request_deadline_includes_blocked_pipe_write():
++    read_fd, write_fd = os.pipe()
++    reader = os.fdopen(read_fd, 'rb', buffering=0)
++    writer = os.fdopen(write_fd, 'wb', buffering=0)
++    channel = Channel(reader, writer, lambda *args: None, name='blocked')
++    result = []
++    finished = threading.Event()
++
++    def request():
++        started = time.monotonic()
++        try:
++            channel.call('large', {'body': 'x' * 1024 * 1024}, timeout=.1)
++        except (TimeoutError, PluginHostUnavailable):
++            result.append(time.monotonic() - started)
++        finally:
++            finished.set()
++
++    thread = threading.Thread(target=request, daemon=True)
++    thread.start()
++    try:
++        assert finished.wait(2), 'RPC timeout did not cover blocked pipe write'
++        assert result and result[0] < 2
++        assert not channel._pending
++    finally:
++        reader.close()
++        thread.join(2)
++        channel.close()
++
++
++def test_oversized_frame_rejected_before_dispatch():
++    read_fd, write_fd = os.pipe()
++    reader = os.fdopen(read_fd, 'rb', buffering=0)
++    writer = os.fdopen(write_fd, 'wb', buffering=0)
++    channel = Channel(reader, writer, lambda *args: None, name='oversized')
++    try:
++        with pytest.raises(ValueError, match='frame'):
++            channel.call('large', {'body': 'x' * (9 * 1024 * 1024)}, timeout=.1)
++        assert not channel._pending
++    finally:
++        reader.close()
++        channel.close()
+diff --git a/tests/hermes_cli/test_plugin_host_containment.py b/tests/hermes_cli/test_plugin_host_containment.py
+new file mode 100644
+index 0000000..c7cbf61
+--- /dev/null
++++ b/tests/hermes_cli/test_plugin_host_containment.py
+@@ -0,0 +1,102 @@
++"""Hard RPC deadlines contain real non-cooperative plugin subprocesses."""
++import time
++
++import pytest
++
++from hermes_cli.plugin_host_wire import PluginHostUnavailable
++from tests.hermes_cli.test_plugin_asgi_lifecycle import hosted
++
++
++FAULT_API = '''
++import asyncio
++import time
++from pathlib import Path
++from contextlib import asynccontextmanager
++from fastapi import APIRouter
++root = Path(__file__).parent
++MODE = {mode!r}
++def entered():
++    with (root / 'entered').open('a') as out: out.write('once\\n')
++async def stuck():
++    entered()
++    while True:
++        try:
++            await asyncio.sleep(60)
++        except asyncio.CancelledError:
++            pass
++if MODE == 'import':
++    entered()
++    time.sleep(60)
++@asynccontextmanager
++async def lifespan(app):
++    if MODE == 'startup':
++        await stuck()
++    yield
++    if MODE == 'shutdown':
++        await stuck()
++router = APIRouter(lifespan=lifespan)
++@router.get('/ping')
++async def ping():
++    if MODE == 'request':
++        await stuck()
++    return {{'ok': True}}
++'''
++
++
++@pytest.mark.parametrize('mode', ['import', 'startup', 'request', 'shutdown'])
++def test_deadline_reaps_only_captured_host_and_never_replays(hosted, mode):
++    host, directory, ping = hosted
++    (directory / 'plugin_api.py').write_text(FAULT_API.format(mode=mode))
++    process = host._proc
++    if mode == 'shutdown':
++        assert ping() == {'ok': True}
++    started = time.monotonic()
++    try:
++        with pytest.raises(TimeoutError):
++            if mode == 'shutdown':
++                host._unload('lifecycle')
++            else:
++                ping()
++        assert time.monotonic() - started < 14
++        assert process.poll() is not None, 'deadline left non-cooperative child running'
++        assert not host.alive
++        assert (directory / 'entered').read_text() == 'once\n'
++        # A timeout is ambiguous, not permission to respawn and replay a write.
++        with pytest.raises(PluginHostUnavailable, match='deadline'):
++            ping()
++        assert host.pid == process.pid
++        assert (directory / 'entered').read_text() == 'once\n'
++    finally:
++        # Even the red run must not leave the deliberately resistant child alive.
++        if process.poll() is None:
++            process.kill()
++        process.wait(timeout=3)
++
++
++def test_late_deadline_cannot_kill_replacement(hosted):
++    from hermes_cli.plugin_host_containment import contain_deadline
++    host, directory, ping = hosted
++    (directory / 'release-start').touch()
++    old = host._channel
++    host.shutdown()
++    host.ensure_started()
++    replacement = host._proc
++    contain_deadline(host, old)
++    assert host._proc is replacement and host.alive
++    assert ping() == {'ok': True}
++
++
++def test_remote_timeout_is_not_transport_failure(hosted):
++    host, directory, ping = hosted
++    (directory / 'plugin_api.py').write_text('''
++from fastapi import APIRouter
++router = APIRouter()
++@router.get('/ping')
++async def ping():
++    raise TimeoutError('upstream read timed out')
++''')
++    process = host._proc
++    with pytest.raises(TimeoutError):
++        ping()
++    assert host.alive and host._proc is process
++    assert host._call('hello', {})['pid'] == process.pid
+diff --git a/tests/hermes_cli/test_plugin_host_request_context.py b/tests/hermes_cli/test_plugin_host_request_context.py
+new file mode 100644
+index 0000000..9ba46ae
+--- /dev/null
++++ b/tests/hermes_cli/test_plugin_host_request_context.py
+@@ -0,0 +1,246 @@
++"""Authenticated request metadata must survive the real plugin subprocess boundary."""
++import json
++import os
++from contextlib import contextmanager, nullcontext
++import socket
++import threading
++import time
++from concurrent.futures import ThreadPoolExecutor
++
++import httpx
++import pytest
++import uvicorn
++
++from hermes_cli.plugins import PluginManager
++
++
++API = '''
++import asyncio, os
++from fastapi import APIRouter, Request
++router = APIRouter()
++accepted = {}
++@router.post('/accept')
++def accept(request: Request):
++    ops = request.state.hermes_operations
++    result = ops.accept('generated-op-' + request.state.hermes_context['selection']['client'], 'a' * 64)
++    accepted['op'] = (ops, result)
++    return {'valid': ops.revalidate(result), 'action': result['record']['action'],
++            'home': result['record']['selection']['home']}
++@router.get('/revalidate')
++def revalidate():
++    ops, result = accepted['op']
++    return {'valid': ops.revalidate(result)}
++@router.get('/scope')
++async def scope(request: Request):
++    await asyncio.sleep(.02)
++    return {'context': getattr(request.state, 'hermes_context', None),
++            'pid': os.getpid(), 'authorization': request.headers.get('authorization')}
++'''
++
++
++def test_host_context_is_request_local_and_not_a_client_header(tmp_path, monkeypatch):
++    home = tmp_path / 'home'
++    home.mkdir()
++    monkeypatch.setenv('HOME', str(tmp_path))
++    monkeypatch.setenv('HERMES_HOME', str(home))
++    dashboard = home / 'dashboard'
++    dashboard.mkdir()
++    (dashboard / 'plugin_api.py').write_text(API)
++    manager = PluginManager()
++    host = manager._plugin_host()
++    try:
++        def call(epoch):
++            context = {'version': 1, 'principal': 'generated-principal',
++                       'home': str(home), 'selection_epoch': epoch}
++            result = host.asgi_request('probe', str(dashboard), 'plugin_api.py',
++                'GET', '/scope', '', [('X-Hermes-Context', 'forged'),
++                ('Authorization', 'Bearer generated-do-not-forward')], b'',
++                trusted_context=context)
++            body = json.loads(result['body'])
++            assert body['context'] == context
++            assert body['pid'] != os.getpid()
++            assert body['authorization'] is None
++        with ThreadPoolExecutor(max_workers=2) as pool:
++            list(pool.map(call, [1, 2]))
++        result = host.asgi_request('probe', str(dashboard), 'plugin_api.py',
++            'GET', '/scope', '', [('X-Hermes-Context', 'forged')], b'')
++        assert json.loads(result['body'])['context'] is None
++    finally:
++        host.shutdown()
++    assert not host.alive
++
++
++def test_dashboard_lifespan_unloads_only_matching_plugin_and_reloads(tmp_path, monkeypatch):
++    monkeypatch.setenv('HOME', str(tmp_path))
++    monkeypatch.setenv('HERMES_HOME', str(tmp_path / 'home'))
++    manager = PluginManager()
++    host = manager._plugin_host()
++    api = '''
++from contextlib import asynccontextmanager
++from pathlib import Path
++from fastapi import APIRouter
++log = Path(__file__).with_suffix('.events')
++@asynccontextmanager
++async def lifespan(app):
++    with log.open('a') as stream: stream.write('start\\n')
++    try:
++        yield
++    finally:
++        with log.open('a') as stream: stream.write('stop\\n')
++router = APIRouter(lifespan=lifespan)
++@router.get('/ping')
++def ping(): return {'ok': True}
++'''
++    dashboards = {}
++    for name in ('one', 'two'):
++        directory = tmp_path / name
++        directory.mkdir()
++        (directory / 'plugin_api.py').write_text(api)
++        dashboards[name] = directory
++    def ping(name):
++        result = host.asgi_request(name, str(dashboards[name]), 'plugin_api.py',
++                                   'GET', '/ping', '', [], b'')
++        assert json.loads(result['body']) == {'ok': True}
++    try:
++        ping('one')
++        ping('two')
++        ping('one')
++        host._unload('one')
++        assert (dashboards['one'] / 'plugin_api.events').read_text() == 'start\nstop\n'
++        assert (dashboards['two'] / 'plugin_api.events').read_text() == 'start\n'
++        ping('one')
++        assert (dashboards['one'] / 'plugin_api.events').read_text() == 'start\nstop\nstart\n'
++    finally:
++        host.shutdown()
++    assert not host.alive
++    for name, expected in [('one', 'start\nstop\nstart\nstop\n'), ('two', 'start\nstop\n')]:
++        assert (dashboards[name] / 'plugin_api.events').read_text() == expected
++
++
++@contextmanager
++def network_client(app):
++    sock = socket.socket()
++    sock.bind(('127.0.0.1', 0))
++    sock.listen(32)
++    server = uvicorn.Server(uvicorn.Config(app, log_level='critical', lifespan='off'))
++    thread = threading.Thread(target=server.run, kwargs={'sockets': [sock]}, daemon=True)
++    thread.start()
++    try:
++        deadline = time.monotonic() + 5
++        while not server.started and thread.is_alive() and time.monotonic() < deadline:
++            threading.Event().wait(.01)
++        assert server.started
++        with httpx.Client(base_url=f'http://127.0.0.1:{sock.getsockname()[1]}', timeout=5) as client:
++            yield client
++    finally:
++        server.should_exit = True
++        thread.join(5)
++        sock.close()
++        assert not thread.is_alive()
++
++
++@pytest.mark.parametrize('network', [False, True])
++def test_authenticated_http_enters_real_host_with_no_credentials(tmp_path, monkeypatch, network):
++    from starlette.testclient import TestClient
++    from hermes_cli import web_server
++    from hermes_cli.config import load_config, save_config
++    from hermes_cli.plugins import get_plugin_manager
++    from hermes_constants import get_hermes_home
++
++    monkeypatch.setenv('HOME', str(tmp_path))
++    home = get_hermes_home()
++    dashboard = home / 'plugins' / 'context-probe' / 'dashboard'
++    dashboard.mkdir(parents=True)
++    (dashboard / 'manifest.json').write_text(json.dumps(
++        {'name': 'context-probe', 'api': 'plugin_api.py', 'request_context': 1}))
++    (dashboard / 'plugin_api.py').write_text(API)
++    cfg = load_config()
++    cfg.setdefault('plugins', {}).update(enabled=['context-probe'], isolation='host')
++    save_config(cfg)
++    routes = list(web_server.app.router.routes)
++    web_server._dashboard_plugins_cache = None
++    transport = network_client(web_server.app) if network else nullcontext(TestClient(web_server.app))
++    client = transport.__enter__()
++    url = '/api/plugins/context-probe/scope'
++    try:
++        assert client.get(url).status_code == 401
++        client.headers[web_server._SESSION_HEADER_NAME] = web_server._SESSION_TOKEN
++        response = client.get(url, headers={'X-Hermes-Context': 'forged'})
++        assert response.status_code == 200, response.text
++        data = response.json()
++        assert data['pid'] != os.getpid()
++        assert data['context']['home'] == str(home.resolve())
++        assert len(data['context']['principal']) == 64
++        assert data['authorization'] is None
++        if network:
++            import subprocess
++            from pathlib import Path
++            env = {key: os.environ[key] for key in ('PATH', 'HOME', 'HERMES_HOME') if key in os.environ}
++            env.update(TEST_PLUGIN_URL=str(client.base_url).rstrip('/') + '/api/plugins/context-probe',
++                       TEST_PLUGIN_AUTH_HEADER=web_server._SESSION_HEADER_NAME,
++                       TEST_PLUGIN_AUTH=web_server._SESSION_TOKEN)
++            probe = subprocess.run(['node', str(Path(__file__).with_name('plugin_selection_network.mts'))],
++                                   env=env, capture_output=True, text=True, timeout=20)
++            assert probe.returncode == 0, probe.stdout + probe.stderr
++        client.headers['X-Hermes-Plugin-Client'] = 'generated-window-' + str(network)
++        assert client.get(url).status_code == 409
++        selection = client.post('/api/plugins/context-probe/_host/selection')
++        assert selection.status_code == 200
++        selected = selection.json()
++        assert set(selected) == {'scope_id', 'epoch'}
++        client.headers['X-Hermes-Plugin-Scope'] = selected['scope_id']
++        client.headers['X-Hermes-Plugin-Epoch'] = str(selected['epoch'])
++        scoped = client.get(url)
++        assert scoped.status_code == 200
++        assert scoped.json()['context']['selection']['home'] == str(home.resolve())
++        assert scoped.json()['context']['selection']['epoch'] == selected['epoch']
++        accepted = client.post('/api/plugins/context-probe/accept', json={'retry': 4})
++        assert accepted.status_code == 200, accepted.text
++        assert accepted.json() == {'valid': True, 'action': 'POST:/accept', 'home': str(home.resolve())}
++        assert client.get('/api/plugins/context-probe/revalidate').json() == {'valid': True}
++        # Selection changes do not revoke immutable accepted work. Exercise the
++        # real private transport after A->B->A, and reject the old HTTP token.
++        from hermes_cli.plugin_request_context import _AUTHORITY
++        original = scoped.json()['context']['selection']
++        deselected = client.post('/api/plugins/context-probe/_host/deselection')
++        assert deselected.status_code == 200
++        assert client.get(url).status_code == 409
++        assert client.post('/api/plugins/context-probe/_host/selection').status_code == 409
++        _AUTHORITY.select(original['principal'], original['client'], original['connection'], str(home / 'B'),
++                          expected_epoch=deselected.json()['epoch'])
++        again = _AUTHORITY.select(original['principal'], original['client'], original['connection'], str(home.resolve()))
++        assert client.get(url).status_code == 409
++        client.headers['X-Hermes-Plugin-Scope'] = again.scope_id
++        client.headers['X-Hermes-Plugin-Epoch'] = str(again.epoch)
++        assert client.get('/api/plugins/context-probe/revalidate').json() == {'valid': True}
++        client.headers['X-Hermes-Plugin-Epoch'] = str(again.epoch + 1)
++        assert client.get(url).status_code == 409
++        # Revocation and re-enable entirely between checks must not revive an
++        # accepted capability (sampling only the final boolean loses this ABA).
++        cfg['plugins']['disabled'] = ['context-probe']
++        save_config(cfg)
++        cfg['plugins']['disabled'] = []
++        save_config(cfg)
++        host = get_plugin_manager()._plugin_host()
++        result = host.asgi_request('context-probe', str(dashboard), 'plugin_api.py',
++            'GET', '/revalidate', '', [], b'')
++        assert json.loads(result['body']) == {'valid': False}
++        cfg['plugins']['disabled'] = ['context-probe']
++        save_config(cfg)
++        assert client.get(url).status_code == 404
++        # Direct child continuation simulates already accepted background work:
++        # unlike a new HTTP request it remains callable, but host policy denies it.
++        host = get_plugin_manager()._plugin_host()
++        result = host.asgi_request('context-probe', str(dashboard), 'plugin_api.py',
++            'GET', '/revalidate', '', [], b'')
++        assert json.loads(result['body']) == {'valid': False}
++        cfg['plugins']['disabled'] = []
++        save_config(cfg)
++        result = host.asgi_request('context-probe', str(dashboard), 'plugin_api.py',
++            'GET', '/revalidate', '', [], b'')
++        assert json.loads(result['body']) == {'valid': False}
++    finally:
++        transport.__exit__(None, None, None)
++        get_plugin_manager()._plugin_host().shutdown()
++        web_server.app.router.routes[:] = routes
++        web_server._dashboard_plugins_cache = None
+diff --git a/tests/hermes_cli/test_plugin_operation_binding.py b/tests/hermes_cli/test_plugin_operation_binding.py
+new file mode 100644
+index 0000000..2bcefcf
+--- /dev/null
++++ b/tests/hermes_cli/test_plugin_operation_binding.py
+@@ -0,0 +1,26 @@
++"""Acceptance binds the entire authorized intent, not just a revision."""
++import pytest
++from hermes_cli.plugin_selection_authority import SelectionAuthority
++
++
++def test_accepted_intent_cannot_be_reused_for_another_action_or_payload():
++    authority = SelectionAuthority()
++    selected = authority.select('p', 'window', 'host', '/owned/A')
++    args = (selected, 'op', 'a' * 64, lambda: True)
++    accepted = authority.accept(*args, action='apply', payload_digest='b' * 64)
++    assert accepted.action == 'apply'
++    assert accepted.payload_digest == 'b' * 64
++    for action, digest in [('stop', 'b' * 64), ('apply', 'c' * 64)]:
++        with pytest.raises(ValueError, match='CONFLICT'):
++            authority.accept(*args, action=action, payload_digest=digest)
++    authority.select('p', 'window', 'host', '/owned/B')
++    assert authority.revalidate(accepted, lambda: True)
++
++
++@pytest.mark.parametrize('action,digest', [('', 'b' * 64), ('apply', ''), ('apply', True)])
++def test_invalid_intent_cannot_be_accepted(action, digest):
++    authority = SelectionAuthority()
++    selected = authority.select('p', 'window', 'host', '/owned/A')
++    with pytest.raises(ValueError, match='INVALID_INPUT'):
++        authority.accept(selected, 'op', 'a' * 64, lambda: True,
++                         action=action, payload_digest=digest)
+diff --git a/tests/hermes_cli/test_plugin_operation_retirement.py b/tests/hermes_cli/test_plugin_operation_retirement.py
+new file mode 100644
+index 0000000..ae40e78
+--- /dev/null
++++ b/tests/hermes_cli/test_plugin_operation_retirement.py
+@@ -0,0 +1,43 @@
++"""Retired capabilities cannot regain authority, even if an ID is reused."""
++from dataclasses import asdict
++
++from hermes_cli.plugin_operation_authority import RequestOperations
++from hermes_cli.plugin_selection_authority import SelectionAuthority
++
++
++def test_retirement_reclaims_all_parent_slots_and_invalidates_old_capability():
++    authority = SelectionAuthority()
++    selected = authority.select('principal', 'window', 'connection', '/owned/A')
++    operations = RequestOperations(authority)
++    old = None
++    for index in range(105):
++        request = operations.open({'selection': asdict(selected)}, 'plugin', 'PUT', '/config', b'body', lambda: True)
++        accepted = operations.call({'verb': 'accept', 'capability': request,
++                                    'operation_id': 'same-id', 'revision': 'a' * 64})
++        operations.close(request)
++        assert operations.call({'verb': 'revalidate', 'capability': accepted['capability']})
++        if old:
++            assert not operations.call({'verb': 'revalidate', 'capability': old['capability']})
++        assert operations.call({'verb': 'retire', 'capability': accepted['capability']})
++        assert not operations.call({'verb': 'revalidate', 'capability': accepted['capability']})
++        old = accepted
++    assert not operations.operations
++    assert not authority._accepted
++    assert not authority._revoked
++
++
++def test_shutdown_revokes_only_its_own_capabilities():
++    authority = SelectionAuthority()
++    selected = authority.select('principal', 'window', 'connection', '/owned/A')
++    left, right = RequestOperations(authority), RequestOperations(authority)
++    def accept(ops, ident):
++        request = ops.open({'selection': asdict(selected)}, 'plugin', 'PUT', '/config', b'body', lambda: True)
++        return ops.call({'verb': 'accept', 'capability': request,
++                         'operation_id': ident, 'revision': 'a' * 64})
++    a, b = accept(left, 'a'), accept(right, 'b')
++    left.shutdown()
++    assert not left.call({'verb': 'revalidate', 'capability': a['capability']})
++    assert right.call({'verb': 'revalidate', 'capability': b['capability']})
++    assert not left.requests
++    right.shutdown()
++    assert not authority._accepted
+diff --git a/tests/hermes_cli/test_plugin_parent_callback_containment.py b/tests/hermes_cli/test_plugin_parent_callback_containment.py
+new file mode 100644
+index 0000000..5715105
+--- /dev/null
++++ b/tests/hermes_cli/test_plugin_parent_callback_containment.py
+@@ -0,0 +1,240 @@
++"""A real child callback cannot hold parent authority locks across policy I/O."""
++import threading
++import time
++from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
++from dataclasses import asdict
++
++import pytest
++
++from hermes_cli.plugin_selection_authority import SelectionAuthority
++from tests.hermes_cli.test_plugin_asgi_lifecycle import hosted
++
++
++API = '''
++from fastapi import APIRouter, Request
++router = APIRouter()
++@router.post('/work')
++def work(request: Request):
++    ops = request.state.hermes_operations
++    accepted = ops.accept('generated-operation', 'a' * 64)
++    return {'valid': ops.revalidate(accepted)}
++'''
++
++
++@pytest.mark.parametrize('blocked_call', [1, 2])
++def test_blocked_parent_policy_does_not_stall_containment(hosted, blocked_call):
++    host, directory, _ = hosted
++    (directory / 'plugin_api.py').write_text(API)
++    # Import FastAPI before measuring callback containment; cold import is a
++    # separate deadline case and can consume the entire one-second RPC budget.
++    host.asgi_request('callback', str(directory), 'plugin_api.py',
++                      'GET', '/warmup', '', [], b'')
++    authority = SelectionAuthority()
++    operations = host._request_operations
++    operations.authority = authority
++    selected = authority.select('principal', 'window', 'connection', str(directory))
++    entered, release, returned = threading.Event(), threading.Event(), threading.Event()
++    calls = []
++
++    def policy():
++        calls.append(1)
++        if len(calls) == blocked_call:
++            entered.set()
++            release.wait(20)
++            returned.set()
++        return True
++
++    context = {'selection': asdict(selected)}
++    token = operations.open(context, 'callback', 'POST', '/work', b'', policy)
++    process = host._proc
++    pool = ThreadPoolExecutor(max_workers=1)
++    future = pool.submit(host._call, 'asgi', {
++        'plugin': 'callback', 'dashboard_dir': str(directory), 'api_file': 'plugin_api.py',
++        'method': 'POST', 'path': '/work', 'query': '', 'headers': [],
++        'body': '', 'trusted_context': context, 'request_capability': token,
++    }, timeout=1)
++    try:
++        assert entered.wait(10), 'real child did not enter parent policy callback'
++        # The RPC must finish while policy is STILL blocked, not after release.
++        try:
++            future.result(timeout=7)
++        except FutureTimeout:
++            assert future.done(), 'parent callback lock stalled deadline containment'
++        else:
++            pytest.fail('blocked callback unexpectedly succeeded')
++        assert process.poll() is not None
++        assert host._deadline_failed and not host.alive
++        assert not returned.is_set()
++        assert not operations.requests and not operations.operations
++        assert not authority._accepted
++        # Shared authority must remain usable by an unrelated scope.
++        other = authority.select('other', 'window', 'connection', '/owned/other')
++        assert authority.current(other)
++    finally:
++        release.set()
++        pool.shutdown(wait=True)
++        if process.poll() is None:
++            process.kill()
++        process.wait(timeout=3)
++    assert returned.wait(2)
++    # Drain the callback thread before testing that its late completion did not
++    # republish an accepted record after shutdown.
++    host._channel._thread.join(2)
++    deadline = time.monotonic() + 2
++    while host._channel._incoming._value != 64 and time.monotonic() < deadline:
++        threading.Event().wait(.01)
++    assert host._channel._incoming._value == 64
++    assert not authority._accepted
++    assert not operations.operations
++
++
++@pytest.mark.parametrize('blocked_call', [1, 2])
++def test_child_callback_timeout_retires_abandoned_authority(hosted, monkeypatch, blocked_call):
++    host, directory, _ = hosted
++    (directory / 'plugin_api.py').write_text(API)
++    # Import FastAPI before measuring callback containment; cold import is a
++    # separate deadline case and can consume the entire one-second RPC budget.
++    host.asgi_request('callback', str(directory), 'plugin_api.py',
++                      'GET', '/warmup', '', [], b'')
++    authority = SelectionAuthority()
++    operations = host._request_operations
++    operations.authority = authority
++    selected = authority.select('principal', 'window', 'connection', str(directory))
++    entered, release = threading.Event(), threading.Event()
++    calls = []
++
++    def policy_incarnation(*args):
++        # First read captures incarnation; subsequent reads are operation policy.
++        calls.append(1)
++        if len(calls) == blocked_call + 1:
++            entered.set()
++            release.wait(20)
++        return 'generated-incarnation'
++
++    monkeypatch.setattr('hermes_cli.plugin_policy_incarnation.policy_incarnation', policy_incarnation)
++    monkeypatch.setattr('hermes_cli.web_server_dashboard._hosted_plugin_for_request',
++                        lambda name: (host, str(directory), 'plugin_api.py'))
++    process = host._proc
++    with ThreadPoolExecutor(max_workers=1) as pool:
++        future = pool.submit(host.asgi_request, 'callback', str(directory), 'plugin_api.py',
++                             'POST', '/work', '', [], b'', trusted_context={
++                                 'selection': asdict(selected), 'home': str(directory)})
++        try:
++            assert entered.wait(10)
++            with pytest.raises(TimeoutError, match='timed out'):
++                future.result(timeout=7)
++            assert future.done(), 'child deadline did not return'
++            assert host.alive and host._proc is process
++            assert not operations.requests
++            assert not operations.operations, 'abandoned accepted capability remains usable'
++            assert not authority._accepted
++        finally:
++            release.set()
++    deadline = time.monotonic() + 3
++    while host._channel._incoming._value != 64 and time.monotonic() < deadline:
++        threading.Event().wait(.01)
++    assert host._channel._incoming._value == 64
++    assert not authority._accepted
++    assert not operations.operations
++    assert host._call('hello', {})['pid'] == process.pid
++
++
++def test_failed_duplicate_request_preserves_original_acceptance(hosted, monkeypatch):
++    host, directory, _ = hosted
++    (directory / 'plugin_api.py').write_text('''
++from fastapi import APIRouter, Request
++router = APIRouter()
++calls = 0
++@router.post('/work')
++def work(request: Request):
++    global calls
++    calls += 1
++    accepted = request.state.hermes_operations.accept('same-operation', 'a' * 64)
++    if calls == 2:
++        raise TimeoutError('generated ambiguous duplicate response')
++    return accepted
++''')
++    authority = SelectionAuthority()
++    operations = host._request_operations
++    operations.authority = authority
++    selected = authority.select('principal', 'window', 'connection', str(directory))
++    monkeypatch.setattr('hermes_cli.plugin_policy_incarnation.policy_incarnation',
++                        lambda *args: 'generated-incarnation')
++    monkeypatch.setattr('hermes_cli.web_server_dashboard._hosted_plugin_for_request',
++                        lambda name: (host, str(directory), 'plugin_api.py'))
++
++    def submit():
++        return host.asgi_request('callback', str(directory), 'plugin_api.py',
++                                 'POST', '/work', '', [], b'', trusted_context={
++                                     'selection': asdict(selected), 'home': str(directory)})
++
++    submit()
++    capability, = operations.operations
++    original = operations.operations[capability][0]
++    with pytest.raises(TimeoutError, match='timed out'):
++        submit()
++    assert host.alive
++    assert not operations.requests
++    assert operations.call({'verb': 'revalidate', 'capability': capability}), (
++        'failed duplicate revoked the previously accepted original operation')
++    assert operations.operations[capability][0] is original
++    submit()
++    assert list(operations.operations) == [capability]
++    assert operations.operations[capability][0] is original
++
++
++def test_accepted_callback_stays_pinned_across_profile_connection_aba(hosted, monkeypatch):
++    host, directory, _ = hosted
++    (directory / 'plugin_api.py').write_text(API)
++    # Import FastAPI before measuring callback containment; cold import is a
++    # separate deadline case and can consume the entire one-second RPC budget.
++    host.asgi_request('callback', str(directory), 'plugin_api.py',
++                      'GET', '/warmup', '', [], b'')
++    authority = SelectionAuthority()
++    operations = host._request_operations
++    operations.authority = authority
++    selected = authority.select('principal', 'window', 'connection-A', str(directory))
++    entered, release = threading.Event(), threading.Event()
++    observed_homes = []
++
++    def policy_incarnation(home, *args):
++        observed_homes.append(home)
++        # Initial capture, acceptance, then pre-dispatch revalidation.
++        if len(observed_homes) == 3:
++            entered.set()
++            release.wait(10)
++        return 'generated-incarnation'
++
++    monkeypatch.setattr('hermes_cli.plugin_policy_incarnation.policy_incarnation', policy_incarnation)
++    monkeypatch.setattr('hermes_cli.web_server_dashboard._hosted_plugin_for_request',
++                        lambda name: (host, str(directory), 'plugin_api.py'))
++    with ThreadPoolExecutor(max_workers=1) as pool:
++        future = pool.submit(host.asgi_request, 'callback', str(directory), 'plugin_api.py',
++                             'POST', '/work', '', [], b'', trusted_context={
++                                 'selection': asdict(selected), 'home': str(directory)})
++        try:
++            assert entered.wait(5)
++            capability, = operations.operations
++            original = operations.operations[capability][0]
++            assert original.selection == selected
++            authority.select('principal', 'window', 'connection-B', str(directory / 'B'))
++            again = authority.select('principal', 'window', 'connection-A', str(directory))
++            assert again.epoch > selected.epoch
++        finally:
++            release.set()
++        import json
++        assert json.loads(future.result(timeout=5)['body']) == {'valid': True}
++    assert set(observed_homes) == {str(directory)}
++    assert operations.operations[capability][0] is original
++    assert operations.call({'verb': 'revalidate', 'capability': capability})
++    # The old selection can continue accepted work but cannot accept fresh work.
++    stale = operations.open({'selection': asdict(selected)}, 'callback', 'POST',
++                            '/work', b'', lambda: True)
++    try:
++        with pytest.raises(ValueError, match='STALE_SCOPE'):
++            operations.call({'verb': 'accept', 'capability': stale,
++                             'operation_id': 'stale-new-work', 'revision': 'a' * 64})
++    finally:
++        operations.close(stale, failed=True)
++    assert operations.call({'verb': 'revalidate', 'capability': capability})
++
+diff --git a/tests/hermes_cli/test_plugin_policy_epoch.py b/tests/hermes_cli/test_plugin_policy_epoch.py
+new file mode 100644
+index 0000000..d4d2701
+--- /dev/null
++++ b/tests/hermes_cli/test_plugin_policy_epoch.py
+@@ -0,0 +1,84 @@
++"""Plugin-specific revocation survives unrelated edits and relevant ABA writes."""
++import copy
++
++import pytest
++
++from hermes_cli.config import atomic_config_replace
++from hermes_cli.plugin_policy_epoch import read_policy_epoch, record_policy_bytes
++
++
++def enabled_config():
++    return {'plugins': {'enabled': ['hermes-cpa'], 'disabled': [],
++                        'entries': {'hermes-cpa': {'settings': {'mode': 'managed'}}}}}
++
++
++def test_unrelated_model_and_other_plugin_changes_preserve_cpa_epoch(tmp_path):
++    config = enabled_config()
++    path = tmp_path / 'config.yaml'
++    atomic_config_replace(path, config)
++    original = read_policy_epoch(tmp_path, 'hermes-cpa')
++    config['model'] = {'provider': 'generated-provider', 'default': 'generated-model'}
++    config['plugins']['enabled'].append('other-plugin')
++    config['plugins']['entries']['other-plugin'] = {'settings': {'sample_rate': 1}}
++    atomic_config_replace(path, config)
++    assert read_policy_epoch(tmp_path, 'hermes-cpa') == original
++    other = read_policy_epoch(tmp_path, 'other-plugin')
++    config['plugins']['entries']['other-plugin']['settings']['sample_rate'] = 2
++    atomic_config_replace(path, config)
++    assert read_policy_epoch(tmp_path, 'hermes-cpa') == original
++    assert read_policy_epoch(tmp_path, 'other-plugin') != other
++
++
++def test_disable_reenable_cannot_restore_old_epoch(tmp_path):
++    original_config = enabled_config()
++    path = tmp_path / 'config.yaml'
++    atomic_config_replace(path, original_config)
++    original = read_policy_epoch(tmp_path, 'hermes-cpa')
++    disabled = copy.deepcopy(original_config)
++    disabled['plugins']['disabled'] = ['hermes-cpa']
++    atomic_config_replace(path, disabled)
++    revoked = read_policy_epoch(tmp_path, 'hermes-cpa')
++    assert revoked != original
++    atomic_config_replace(path, original_config)
++    restored = read_policy_epoch(tmp_path, 'hermes-cpa')
++    assert restored not in (original, revoked)
++
++
++def test_removal_reinstall_and_mode_change_revoke_epoch(tmp_path):
++    config = enabled_config()
++    path = tmp_path / 'config.yaml'
++    atomic_config_replace(path, config)
++    original = read_policy_epoch(tmp_path, 'hermes-cpa')
++    atomic_config_replace(path, {})
++    removed = read_policy_epoch(tmp_path, 'hermes-cpa')
++    assert removed != original
++    atomic_config_replace(path, config)
++    reinstalled = read_policy_epoch(tmp_path, 'hermes-cpa')
++    assert reinstalled not in (original, removed)
++    config['plugins']['entries']['hermes-cpa']['settings']['mode'] = 'external'
++    atomic_config_replace(path, config)
++    assert read_policy_epoch(tmp_path, 'hermes-cpa') != reinstalled
++
++
++def test_unreadable_epoch_does_not_allow_config_publication(tmp_path):
++    path = tmp_path / 'config.yaml'
++    config = enabled_config()
++    atomic_config_replace(path, config)
++    before = path.read_bytes()
++    (tmp_path / '.plugin-policy-epochs.json').write_text('{invalid-json')
++    assert read_policy_epoch(tmp_path, 'hermes-cpa') is None
++    config['model'] = {'default': 'generated-other-model'}
++    with pytest.raises(ValueError):
++        atomic_config_replace(path, config)
++    assert path.read_bytes() == before
++
++
++def test_serialized_pm_policy_disable_reenable_revokes_epoch(tmp_path):
++    enabled = b'plugins:\n  enabled: [hermes-cpa]\n  disabled: []\n'
++    disabled = b'plugins:\n  enabled: [hermes-cpa]\n  disabled: [hermes-cpa]\n'
++    record_policy_bytes(tmp_path, None, enabled)
++    original = read_policy_epoch(tmp_path, 'hermes-cpa')
++    record_policy_bytes(tmp_path, enabled, disabled)
++    revoked = read_policy_epoch(tmp_path, 'hermes-cpa')
++    record_policy_bytes(tmp_path, disabled, enabled)
++    assert read_policy_epoch(tmp_path, 'hermes-cpa') not in (original, revoked)
+diff --git a/tests/hermes_cli/test_plugin_policy_incarnation.py b/tests/hermes_cli/test_plugin_policy_incarnation.py
+new file mode 100644
+index 0000000..9323ceb
+--- /dev/null
++++ b/tests/hermes_cli/test_plugin_policy_incarnation.py
+@@ -0,0 +1,29 @@
++"""Policy incarnation detects between-check ABA without revoking selection."""
++import os
++
++from hermes_cli.plugin_policy_incarnation import policy_incarnation
++
++
++def test_in_place_policy_aba_and_package_removal_are_not_same_incarnation(tmp_path, monkeypatch):
++    monkeypatch.setenv('HOME', str(tmp_path))
++    home = tmp_path / 'home'
++    dashboard = home / 'plugins/probe/dashboard'
++    dashboard.mkdir(parents=True)
++    config = home / 'config.yaml'
++    config.write_text('plugins: {enabled: [probe]}\n')
++    (dashboard / 'manifest.json').write_text('{}')
++    api = dashboard / 'api.py'
++    api.write_text('value = 1\n')
++    before = policy_incarnation(home, dashboard, 'api.py')
++    # Unrelated state writes must not revoke accepted work.
++    (home / 'logs').mkdir()
++    assert policy_incarnation(home, dashboard, 'api.py') == before
++    original, stat = config.read_bytes(), config.stat()
++    config.write_text('plugins: {enabled: []}\n')
++    config.write_bytes(original)
++    os.utime(config, ns=(stat.st_atime_ns, stat.st_mtime_ns))
++    after = policy_incarnation(home, dashboard, 'api.py')
++    assert after != before
++    api.unlink()
++    api.write_text('value = 1\n')
++    assert policy_incarnation(home, dashboard, 'api.py') != after
+diff --git a/tests/hermes_cli/test_plugin_request_operations.py b/tests/hermes_cli/test_plugin_request_operations.py
+new file mode 100644
+index 0000000..8e3c5ce
+--- /dev/null
++++ b/tests/hermes_cli/test_plugin_request_operations.py
+@@ -0,0 +1,47 @@
++"""Private operation transport authority, including expired request capabilities."""
++from dataclasses import asdict
++import pytest
++
++from hermes_cli.plugin_operation_authority import RequestOperations
++from hermes_cli.plugin_selection_authority import SelectionAuthority
++
++
++def test_expired_request_cannot_accept_and_committed_work_stays_pinned():
++    authority = SelectionAuthority()
++    ops = RequestOperations(authority)
++    selected = authority.select('p', 'window', 'host', '/A')
++    enabled = [True]
++    token = ops.open({'selection': asdict(selected)}, 'plugin', 'PUT', '/config', b'one', lambda: enabled[0])
++    params = {'verb': 'accept', 'capability': token, 'operation_id': 'op', 'revision': 'a' * 64}
++    accepted = ops.call(params)
++    assert ops.call(params) == accepted
++    ops.close(token)
++    with pytest.raises(ValueError, match='STALE_SCOPE'):
++        ops.call(params)
++    deselected = authority.deselect('p', 'window', selected.scope_id, selected.epoch)
++    check = {'verb': 'revalidate', 'capability': accepted['capability']}
++    assert ops.call(check)
++    assert accepted['record']['selection']['home'] == '/A'
++    restored = authority.select('p', 'window', 'host', '/A', expected_epoch=deselected.epoch)
++    assert restored.epoch > selected.epoch
++    enabled[0] = False
++    assert not ops.call(check)
++    enabled[0] = True
++    assert not ops.call(check)
++    assert not ops.call({'verb': 'revalidate', 'capability': 'forged'})
++
++
++def test_delayed_unaccepted_request_fails_after_switch_and_payload_collision():
++    authority = SelectionAuthority()
++    ops = RequestOperations(authority)
++    selected = authority.select('p', 'window', 'host', '/A')
++    context = {'selection': asdict(selected)}
++    first = ops.open(context, 'plugin', 'PUT', '/config', b'one', lambda: True)
++    other = ops.open(context, 'plugin', 'PUT', '/config', b'two', lambda: True)
++    params = {'verb': 'accept', 'capability': first, 'operation_id': 'op', 'revision': 'a' * 64}
++    ops.call(params)
++    with pytest.raises(ValueError, match='CONFLICT'):
++        ops.call({**params, 'capability': other})
++    authority.select('p', 'window', 'host', '/B')
++    with pytest.raises(ValueError, match='STALE_SCOPE'):
++        ops.call({**params, 'operation_id': 'queued'})
+diff --git a/tests/hermes_cli/test_plugin_selection_authority.py b/tests/hermes_cli/test_plugin_selection_authority.py
+new file mode 100644
+index 0000000..873ab45
+--- /dev/null
++++ b/tests/hermes_cli/test_plugin_selection_authority.py
+@@ -0,0 +1,63 @@
++"""Selection ABA and accepted-work semantics, without credentials or a fake host."""
++import pytest
++
++from hermes_cli.plugin_selection_authority import SelectionAuthority
++
++
++def test_switch_rejects_stale_acceptance_but_not_committed_work():
++    authority = SelectionAuthority()
++    first = authority.select('principal', 'window', 'connection', '/owned/A')
++    accepted = authority.accept(first, 'operation', 'a' * 64, lambda: True, action='apply', payload_digest='b' * 64)
++    authority.select('principal', 'window', 'connection', '/owned/B')
++    again = authority.select('principal', 'window', 'connection', '/owned/A')
++    assert again.epoch > first.epoch
++    with pytest.raises(ValueError, match='STALE_SCOPE'):
++        authority.accept(first, 'stale', 'a' * 64, lambda: True, action='apply', payload_digest='b' * 64)
++    assert accepted.selection == first
++    assert authority.revalidate(accepted, lambda: True)
++    assert not authority.revalidate(accepted, lambda: False)
++    # A restored policy cannot resurrect explicitly revoked accepted work.
++    assert not authority.revalidate(accepted, lambda: True)
++
++
++def test_principal_connection_and_revision_are_immutable():
++    authority = SelectionAuthority()
++    a = authority.select('principal-a', 'window', 'connection-a', '/owned/A')
++    b = authority.select('principal-b', 'window', 'connection-b', '/owned/B')
++    op = authority.accept(a, 'operation', 'a' * 64, lambda: True, action='apply', payload_digest='b' * 64)
++    assert authority.current(a)
++    assert authority.current(b)
++    with pytest.raises(ValueError, match='STALE_REVISION'):
++        authority.accept(a, 'bad', '', lambda: True, action='apply', payload_digest='b' * 64)
++    with pytest.raises(ValueError, match='CONFLICT'):
++        authority.accept(a, 'operation', 'b' * 64, lambda: True, action='apply', payload_digest='b' * 64)
++    assert authority.accept(a, 'operation', 'a' * 64, lambda: True, action='apply', payload_digest='b' * 64) == op
++    with pytest.raises(ValueError, match='POLICY_LOCKED'):
++        authority.accept(a, 'revoked', 'a' * 64, lambda: False, action='apply', payload_digest='b' * 64)
++
++
++def test_revalidation_error_fails_closed():
++    authority = SelectionAuthority()
++    selection = authority.select('principal', 'window', 'connection', '/owned/A')
++    op = authority.accept(selection, 'operation', 'a' * 64, lambda: True, action='apply', payload_digest='b' * 64)
++    def unavailable():
++        raise OSError('unavailable policy')
++    assert not authority.revalidate(op, unavailable)
++    assert not authority.revalidate(op, lambda: True)
++    with pytest.raises(ValueError, match='POLICY_LOCKED'):
++        authority.accept(selection, 'operation', 'a' * 64, lambda: True, action='apply', payload_digest='b' * 64)
++
++
++def test_delayed_selection_cannot_retarget_after_switch():
++    authority = SelectionAuthority()
++    a = authority.select('p', 'client', 'connection', '/A', expected_epoch=0)
++    b = authority.select('p', 'client', 'connection', '/B', expected_epoch=a.epoch)
++    with pytest.raises(ValueError, match='STALE_SCOPE'):
++        authority.select('p', 'client', 'connection', '/A', expected_epoch=a.epoch)
++    assert authority.current(b)
++    with pytest.raises(ValueError, match='STALE_SCOPE'):
++        authority.resolve('other-principal', 'client', b.scope_id, b.epoch)
++    again = authority.select('p', 'client', 'connection', '/A', expected_epoch=b.epoch)
++    with pytest.raises(ValueError, match='STALE_SCOPE'):
++        authority.resolve('p', 'client', a.scope_id, a.epoch)
++    assert authority.resolve('p', 'client', again.scope_id, again.epoch) == again
+diff --git a/tests/hermes_cli/test_plugin_two_profile_context.py b/tests/hermes_cli/test_plugin_two_profile_context.py
+new file mode 100644
+index 0000000..2a18d12
+--- /dev/null
++++ b/tests/hermes_cli/test_plugin_two_profile_context.py
+@@ -0,0 +1,124 @@
++"""Two generated profile homes through authenticated HTTP and real plugin hosts."""
++import json
++import os
++from pathlib import Path
++
++from tests.hermes_cli.test_plugin_host_request_context import API, network_client
++
++
++def test_two_profile_selection_aba_preserves_pinned_acceptance(tmp_path, monkeypatch):
++    from hermes_cli import web_server
++    from hermes_cli.config import load_config, save_config
++    from hermes_cli.plugins import get_plugin_manager
++    from hermes_cli.web_server_profiles import _config_profile_scope
++
++    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
++    monkeypatch.setenv('HOME', str(tmp_path))
++    home = tmp_path / '.hermes'
++    monkeypatch.setenv('HERMES_HOME', str(home))
++    homes = {'current': home, 'beta': home / 'profiles/beta'}
++    for name, directory in homes.items():
++        dashboard = directory / 'plugins/context-probe/dashboard'
++        dashboard.mkdir(parents=True)
++        (dashboard / 'manifest.json').write_text(json.dumps({
++            'name': 'context-probe', 'api': 'plugin_api.py', 'request_context': 1}))
++        (dashboard / 'plugin_api.py').write_text(API)
++        # The named-profile identity must exist before resolving its scope.
++        (directory / 'profile.yaml').write_text('name: ' + name + '\n')
++        with _config_profile_scope(name):
++            cfg = load_config()
++            cfg.setdefault('plugins', {}).update(enabled=['context-probe'], isolation='host')
++            save_config(cfg)
++    snapshots = {name: (directory / 'config.yaml').read_bytes()
++                 for name, directory in homes.items()}
++    routes = list(web_server.app.router.routes)
++    web_server._dashboard_plugins_cache = None
++    hosts = []
++    base = '/api/plugins/context-probe'
++    try:
++        with network_client(web_server.app) as client:
++            client.headers[web_server._SESSION_HEADER_NAME] = web_server._SESSION_TOKEN
++            client.headers['X-Hermes-Plugin-Client'] = 'generated-two-profile-window'
++
++            def request(method, path, profile):
++                return client.request(method, base + path, params={'profile': profile})
++
++            def select(profile):
++                response = request('POST', '/_host/selection', profile)
++                assert response.status_code == 200, response.text
++                value = response.json()
++                client.headers['X-Hermes-Plugin-Scope'] = value['scope_id']
++                client.headers['X-Hermes-Plugin-Epoch'] = str(value['epoch'])
++                return value
++
++            first = select('current')
++            accepted = request('POST', '/accept', 'current')
++            assert accepted.status_code == 200, accepted.text
++            assert accepted.json()['home'] == str(home)
++            first_scope = request('GET', '/scope', 'current').json()
++            assert first_scope['pid'] != os.getpid()
++            # A comparison token cannot authorize the other profile's handler.
++            assert request('GET', '/scope', 'beta').status_code == 409
++            second = select('beta')
++            assert second['epoch'] > first['epoch']
++            other_scope = request('GET', '/scope', 'beta')
++            assert other_scope.status_code == 200, other_scope.text
++            other_scope = other_scope.json()
++            assert other_scope['context']['home'] == str(homes['beta'])
++            assert other_scope['pid'] not in (os.getpid(), first_scope['pid'])
++            assert request('GET', '/scope', 'current').status_code == 409
++            # Original accepted operation remains in A's actual subprocess and
++            # uses its captured A policy, even while B is selected.
++            with _config_profile_scope('current'):
++                host = get_plugin_manager()._plugin_host()
++                result = host.asgi_request('context-probe',
++                    str(home / 'plugins/context-probe/dashboard'), 'plugin_api.py',
++                    'GET', '/revalidate', '', [], b'')
++                assert json.loads(result['body']) == {'valid': True}
++            again = select('current')
++            assert again['epoch'] > second['epoch']
++            assert request('GET', '/revalidate', 'current').json() == {'valid': True}
++            current_headers = dict(client.headers)
++            client.headers['X-Hermes-Plugin-Scope'] = first['scope_id']
++            client.headers['X-Hermes-Plugin-Epoch'] = str(first['epoch'])
++            assert request('POST', '/accept', 'current').status_code == 409
++            client.headers.update(current_headers)
++            # A separate native client has an independent selection, not a
++            # process-global current profile shared with this window.
++            client.headers['X-Hermes-Plugin-Client'] = 'generated-independent-window'
++            client.headers.pop('X-Hermes-Plugin-Scope')
++            client.headers.pop('X-Hermes-Plugin-Epoch')
++            select('beta')
++            assert request('GET', '/scope', 'beta').status_code == 200
++            client.headers.update(current_headers)
++            assert request('GET', '/revalidate', 'current').json() == {'valid': True}
++            assert request('GET', '/scope', 'current').json()['pid'] == first_scope['pid']
++        assert all((homes[name] / 'config.yaml').read_bytes() == data
++                   for name, data in snapshots.items())
++        # Explicit policy revocation is distinct from selection: revoking B
++        # must not revoke A, while A disable/re-enable must latch against ABA.
++        def revalidate_original():
++            with _config_profile_scope('current'):
++                original_host = get_plugin_manager()._plugin_host()
++                result = original_host.asgi_request('context-probe',
++                    str(home / 'plugins/context-probe/dashboard'), 'plugin_api.py',
++                    'GET', '/revalidate', '', [], b'')
++                return json.loads(result['body'])['valid']
++
++        for profile in ('beta', 'current'):
++            with _config_profile_scope(profile):
++                cfg = load_config()
++                cfg['plugins']['disabled'] = ['context-probe']
++                save_config(cfg)
++                cfg['plugins']['disabled'] = []
++                save_config(cfg)
++            assert revalidate_original() is (profile == 'beta')
++    finally:
++        for name in homes:
++            with _config_profile_scope(name):
++                host = get_plugin_manager()._plugin_host()
++                hosts.append(host)
++                host.shutdown()
++        web_server.app.router.routes[:] = routes
++        web_server._dashboard_plugins_cache = None
++    assert all(not host.alive for host in hosts)
+diff --git a/tools/delegate_tool_config.py b/tools/delegate_tool_config.py
+index 07d4779..8b9331e 100644
+--- a/tools/delegate_tool_config.py
++++ b/tools/delegate_tool_config.py
+@@ -497,7 +497,8 @@
+     try:
+         runtime = resolve_runtime_provider(
+             requested=resolved_provider, target_model=resolved_model,
+-            explicit_api_key=result.api_key or None, explicit_base_url=result.base_url or None,
++            explicit_api_key=(result.api_key if isinstance(result.api_key, str) else None),
++            explicit_base_url=result.base_url or None,
+         )
+     except Exception as exc:
+         # Unlike a plain model switch, delegation also needs the provider's command/args.

@@ -1,0 +1,37 @@
+[project]
+name = "hermes-cpa"
+version = "1.0.0"
+description = "Native CPA lifecycle and CPA-MC desktop integration plugin for Hermes"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+    "pydantic>=2.10.0,<3",
+    "httpx>=0.28.0,<1",
+    "fastapi>=0.104.0,<1",
+    "ruamel.yaml>=0.18.0,<1",
+    "psutil>=6.0.0,<8",
+    "bcrypt==5.0.0",
+]
+
+[project.entry-points."hermes_agent.plugins"]
+hermes-cpa = "hermes_cpa:register"
+
+[build-system]
+requires = ["hatchling==1.32.4"]
+build-backend = "hatchling.build"
+
+# The unified Git directory install is the primary, supported layout. This wheel
+# carries only the Python package: no plugin.yaml, compatibility.json, console
+# assets or notices. Wheel installs therefore support inert registration and
+# status only; `hermes cpa setup` refuses with package_incomplete.
+[tool.hatch.build.targets.wheel]
+packages = ["src/hermes_cpa"]
+
+[dependency-groups]
+dev = [
+    "hatchling>=1.32.4",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "tests/backend", "tests/gates"]

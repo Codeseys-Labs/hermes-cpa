@@ -1,0 +1,41 @@
+# Dependencies and generated runtime state
+**/node_modules/
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+**/.venv/
+**/venv/
+**/dist/
+**/dist-hermes/
+**/dist-reference/
+**/coverage/
+**/test-results/
+**/playwright-report/
+
+# Credentials, process state, and local evidence
+.env
+.env.*
+.envrc
+.hermes/
+user-data/
+test-home/
+*.pem
+*.key
+*.secret
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+*.sock
+*.pid
+*.log
+runtime/
+evidence/
+*.tar.gz
+*.tgz
+*.zip
+
+# Isolated local qualification checkout and environments
+.verification/

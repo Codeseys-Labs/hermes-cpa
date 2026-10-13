@@ -1,0 +1,10 @@
+{
+  "name": "hermes-cpa",
+  "label": "CLI Proxy API Console",
+  "description": "Scoped backend routes for the Hermes Desktop CPA console.",
+  "version": "1.0.0",
+  "tab": {"path": "/cpa", "hidden": true},
+  "entry": "index.js",
+  "api": "plugin_api.py",
+  "request_context": 1
+}

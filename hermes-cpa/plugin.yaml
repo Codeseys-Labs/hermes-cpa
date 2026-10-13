@@ -1,0 +1,50 @@
+name: hermes-cpa
+version: 1.0.0
+description: Standalone native CPA lifecycle controller and embedded CPA-MC console
+# Load gate only. Managed setup, enrollment and autostart additionally require the
+# documented host-integration contract (hermes_cpa.host_compat) at runtime.
+requires_hermes: ">=0.21.6"
+author: Nous Research
+license: MIT
+entry_point: hermes_cpa:register
+# Mirrors pyproject.toml [project].dependencies, which owns installation. Listed
+# here so discovery reports a missing dependency (notably bcrypt) at load time.
+python_dependencies:
+  - "pydantic>=2.10.0,<3"
+  - "httpx>=0.28.0,<1"
+  - "fastapi>=0.104.0,<1"
+  - "ruamel.yaml>=0.18.0,<1"
+  - "psutil>=6.0.0,<8"
+  - "bcrypt==5.0.0"
+config_schema:
+  mode:
+    type: string
+    enum: [external, managed]
+    default: external
+    description: "CPA management mode (external read-only or managed instance)"
+  managed_port:
+    type: integer
+    default: 8318
+    description: "Local loopback port for managed CPA instance"
+  broker_port:
+    type: integer
+    description: "Loopback port of the default-profile inference broker; set by managed setup"
+  autostart:
+    type: boolean
+    default: false
+    description: "Start managed services with Hermes plugin lifetime (remembered setup opt-in)"
+  isolated_authorization:
+    type: string
+    description: "Explicit expiring generated-data validation permit path; not release approval"
+  external_endpoint:
+    type: string
+    default: ""
+    description: "Loopback HTTP endpoint for external CPA instance"
+  management_key:
+    type: secret
+    env: HERMES_CPA_MANAGEMENT_KEY
+    description: "Management secret key for CPA instance"
+  inference_key:
+    type: secret
+    env: HERMES_CPA_INFERENCE_KEY
+    description: "Separate inference access key for CPA instance"
