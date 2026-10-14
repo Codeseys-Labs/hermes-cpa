@@ -1,10 +1,23 @@
 {
   "name": "hermes-cpa",
   "label": "CLI Proxy API Console",
-  "description": "Scoped backend routes for the Hermes Desktop CPA console.",
+  "description": "Trusted full CPA Management Center launcher.",
   "version": "1.0.0",
-  "tab": {"path": "/cpa", "hidden": true},
+  "tab": {"path": "/cpa", "position": "end"},
   "entry": "index.js",
   "api": "plugin_api.py",
-  "request_context": 1
+  "request_context": 1,
+  "api_limits": {
+    "request_bytes": 50331648,
+    "response_bytes": 50331648,
+    "routes": [
+      "/console/prepare",
+      "/console/result",
+      "/console/file",
+      "/console/resource",
+      "/console/browser",
+      "/console/plugin"
+    ]
+  },
+  "resource_presentation": 1
 }

@@ -18,30 +18,30 @@ def test_sec1_unaccepted_manifest_blocks_install(case):
     assert not case.settings.binary_path.exists(), 'Unaccepted fixture was installed'
 
 
-def test_sec2_post_replace_failure_preserves_external_edit(store, monkeypatch):
-    owner = Owner()
-    original = store._atomic
+def test_sec2_failed_commit_preserves_external_edit(store, monkeypatch):
+    owner = Owner(store)
+    original = store._write_in_place
     external = b'config-version: 8\nexternal: retained\n'
     failed = False
 
-    def partial_failure(path, raw):
+    def partial_failure(raw):
         nonlocal failed
-        original(path, raw)
-        if path == store.config_path and not failed:
+        original(raw)
+        if not failed:
             failed = True
-            # Replacement succeeded, but durability acknowledgement fails after
-            # an independent writer changes bytes. No real disk fault claimed.
-            path.write_bytes(external)
-            raise OSError('generated directory fsync failure')
+            # An independent writer changes the completed write before its
+            # durability acknowledgement. This is an injected fault, not a disk failure.
+            store.config_path.write_bytes(external)
+            raise OSError('generated fsync failure')
 
-    monkeypatch.setattr(store, '_atomic', partial_failure)
+    monkeypatch.setattr(store, '_write_in_place', partial_failure)
     result = apply(store, owner)
     assert not result['ok']
     assert store.config_path.read_bytes() == external, result
 
 
 def test_sec3_policy_revoked_during_stop_prevents_apply(store):
-    owner = Owner()
+    owner = Owner(store)
     before = store.config_path.read_bytes()
     stop = owner.stop_owned_and_reap
 

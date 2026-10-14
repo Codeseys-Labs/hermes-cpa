@@ -1,12 +1,14 @@
 # Hermes CPA Native Plugin
 
-Standalone unified plugin for native CLI Proxy API (CPA) process lifecycle supervision and CPA Management Center (CPA-MC) desktop integration.
+Unified agent plugin for native CLIProxyAPI (CPA) lifecycle supervision, a registered Hermes inference provider, and the full pinned CPA Management Center (CPAMC 1.25.6) in the Agent Dashboard and optional Desktop workspace.
 
 ## Features
 - Managed CPA child supervision with private Unix domain socket and lifetime advisory lock.
 - Clean parent-death termination (`PR_SET_PDEATHSIG`) ensuring no unmanaged orphans.
-- Opaque SandboxedFrame desktop integration with strict MessageChannel RPC protocol.
-- Atomic config mutations with revision locking, fsync, and guarded rollback.
+- Opaque sandboxed CPAMC presentation, with authenticated host mediation and explicit trusted unlock.
+- Full pinned configuration, provider-key, OAuth, credential, quota and native-plugin interfaces.
+- Revision-checked configuration mutations, reviewed effects and operation reconciliation without mutation replay.
+- Separate, short-lived native resource grants tied to the reviewed plugin incarnation and presenting document.
 
 This is an isolated, unaccepted candidate, not a release or deployment approval.
 Rollback can fail or stop on drift/revocation; it never guarantees restoration.
@@ -25,9 +27,11 @@ was not a directory-loader entrypoint.
 
 Registration is inert by default: an external/unconfigured installation starts
 no owner, binary, management probe or credential resolution. Explicit
-`hermes cpa setup --consent` prepares the pinned CPA release, generates separate
-management/inference keys, starts the owner and broker, and enrolls `custom:cpa`
-without changing the default model. It remembers managed autostart unless
+`hermes cpa setup --consent` prepares the checksum-pinned `hermes-owner-v1` CPA
+runtime, generates one user-managed public API key, leaves public management
+disabled, and starts the exact-owned instance and broker. It enrolls `custom:cpa`
+without changing the default model. Managed control and inference use private
+Unix channels, not public CPA keys. Setup remembers managed autostart unless
 `--no-autostart` is selected. Subsequent opted-in loads acquire scoped service
 leases; unloading one host releases only its lease. Explicit stop, plugin disable,
 removal or relevant policy revocation stops the owned services. Unrelated Hermes
@@ -38,20 +42,42 @@ not; managed setup refuses an incomplete package. The scoped host patch runs
 native CLI argument parsing and handlers in the isolated plugin child, including
 normal help and foreground signal handling. Stock Hermes lacks this contract.
 See the [repository installation guide](../README.md) for the pinned host patch.
-Full upstream mutation parity and release/minimum-version acceptance remain open.
+Release acceptance and a minimum qualified Desktop version remain unset.
 
-## Backend credential resolution
+## Credentials and console authority
 
-Authenticated hosted requests carry a pinned RequestScope into
-CpaAdapter.from_scope through ProfileSecretResolver. Native CLI/owner calls pin
-their explicit home. Each management read rebuilds that home's supported Hermes
-secret scope; rotation does not require restarting the plugin. A missing value
-fails closed rather than borrowing another profile's key or the process environment.
-Native managed onboarding generates the management/inference keys via the host
-credential writer; the console never receives them.
+The managed instance's public API keys, upstream provider keys and OAuth account
+files are user-managed CPA configuration. An explicitly unlocked CPAMC document
+can read and edit those values. The console is therefore a privileged credential
+editor, not a secret-redacted status view. It never receives the Hermes session
+token, private owner authority or broker signing authority.
 
-This is management-plane authentication (HERMES_CPA_MANAGEMENT_KEY), not worker
-model-provider subscription authentication. The separate opt-in native subscription
-broker implements the default-owner/all-local-workers decision; see
-[subscription broker](SUBSCRIPTION-BROKER.md). Management keys are never used for
-inference. No live credential migration is performed by this candidate.
+The trusted launcher binds operations to its captured host/profile session and
+console document. Mutations require review through the trusted host UI; accepted
+operations are polled by receipt rather than replayed after an uncertain reply.
+Locking, selection retirement and plugin-generation changes revoke the document.
+Desktop external links use the native opener; Dashboard links require a new user
+gesture on the trusted launcher prompt. File import and export are bounded at
+10 MiB and 32 MiB respectively.
+
+Native plugin pages use a separate resource grant, not the console management
+channel. A grant authorizes an exact resource for the reviewed plugin incarnation;
+native GETs may have effects and are not automatically retried. Resource content
+does not inherit Hermes headers, cookies, session tokens or the console bridge.
+
+Managed private channels remain independent of public CPA host, port, TLS,
+management-secret and API-key settings. Public credential changes therefore do
+not require re-enrolling Hermes. Models are discovered through the broker using
+Hermes's normal cache; use Refresh Models for immediate discovery.
+
+External-instance passive reads still resolve `HERMES_CPA_MANAGEMENT_KEY` from the
+authenticated request's pinned profile, never another profile or ambient fallback.
+The explicit standalone external broker separately uses that owner's
+`HERMES_CPA_INFERENCE_KEY`; it is not the managed owner channel. See
+[subscription broker](SUBSCRIPTION-BROKER.md).
+
+Existing configurations or legacy private CPA key entries are not silently
+migrated, rotated, reused or deleted by setup. This candidate requires a fresh,
+explicitly permitted isolated root for the private-channel transition. No live
+credential migration or real provider authorization is implied by generated
+qualification.

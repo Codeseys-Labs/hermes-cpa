@@ -17,7 +17,7 @@ from hermes_cpa.settings import CpaSettings
 from test_native_setup import free_port, wait_for
 
 
-@pytest.mark.skipif(not os.environ.get('CPA_TEST_ARCHIVE'), reason='Pinned public CPA archive required')
+@pytest.mark.skipif(not os.environ.get('CPA_TEST_ARCHIVE'), reason='Pinned hermes-owner-v1 runtime archive required')
 def test_hermes_setup_preserves_isolation_and_outlives_command(tmp_path):
     root = tmp_path / 'root'
     home = root / '.hermes'
@@ -54,6 +54,8 @@ def test_hermes_setup_preserves_isolation_and_outlives_command(tmp_path):
         assert config['plugins']['isolation'] == 'host'
         assert config['providers']['cpa']['discover_models'] is True
         assert not {'api_key', 'key_env', 'api_key_env'} & config['providers']['cpa'].keys()
+        env_file = home / '.env'
+        assert not env_file.exists() or 'HERMES_CPA_' not in env_file.read_text()
         assert check_process_alive(owner) and check_process_alive(child)
     finally:
         controller_from_profile(settings, package).unload()

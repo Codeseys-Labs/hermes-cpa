@@ -91,10 +91,17 @@
   },
   "header": {
     "refresh_all": "Refresh All",
-    "logout": "Logout"
+    "logout": "Logout",
+    "lock_console": "Lock console"
   },
   "connection": {
     "status": "Connection Status:"
+  },
+  "hosted": {
+    "locked_title": "Console locked",
+    "locked_desc": "This console session has ended. Unlock it again from the Hermes dashboard to continue.",
+    "unavailable_title": "Console unavailable",
+    "unavailable_desc": "The host did not provide an unlocked management session. Unlock the console from the Hermes dashboard and reload."
   },
   "nav": {
     "dashboard": "Dashboard",
@@ -299,6 +306,8 @@
     "upload_error_json": "Only JSON files are allowed",
     "upload_error_size": "File size cannot exceed {{maxSize}}",
     "upload_success": "File uploaded successfully",
+    "upload_outcome_unknown": "Upload outcome unknown for: {{files}}. They were not retried; check the credential list before uploading again.",
+    "upload_not_attempted": "Not uploaded: {{files}}.",
     "download_success": "File downloaded successfully",
     "delete_success": "File deleted successfully",
     "delete_all_success": "Successfully deleted",
@@ -1754,7 +1763,10 @@
     "not_found": "Plugin page not found",
     "not_found_desc": "This plugin page is not declared by the current backend plugin list.",
     "empty_src": "Plugin page URL is empty",
-    "empty_src_desc": "This plugin menu does not provide an embeddable page URL."
+    "empty_src_desc": "This plugin menu does not provide an embeddable page URL.",
+    "host_open": "Open plugin page",
+    "host_open_failed": "Failed to open plugin page",
+    "host_presentation_desc": "{{plugin}} runs in a separate host window with no access to this console, its session, or Hermes."
   },
   "system_info": {
     "title": "Management Center Info",
@@ -1782,7 +1794,12 @@
     "clear_login_title": "Local Login Data",
     "clear_login_desc": "Clear locally saved login data and sign out.",
     "clear_login_button": "Clear login data",
-    "clear_login_confirm": "Clear local login data and sign out now?"
+    "clear_login_confirm": "Clear local login data and sign out now?",
+    "lock_console_title": "Console Session",
+    "lock_console_desc": "Lock this console. Unlock it again from the Hermes dashboard.",
+    "lock_console_confirm": "Lock the console now? Pending operations that were not accepted are cancelled.",
+    "lock_console_button": "Lock console",
+    "hosted_connection": "Hermes-managed CPA"
   },
   "notification": {
     "trusted_proxies_restart_required": "Trusted proxy settings saved. Restart the backend to apply them.",
@@ -1804,7 +1821,8 @@
     "login_failed": "Login failed",
     "commercial_mode_restart_required": "Commercial mode setting changed. Please restart the service for it to take effect",
     "copy_failed": "Copy failed",
-    "link_copied": "Link copied to clipboard"
+    "link_copied": "Link copied to clipboard",
+    "open_link_failed": "Failed to open link"
   },
   "language": {
     "switch": "Language",

@@ -136,8 +136,8 @@ class OperationGuardServer:
             self.records.clear()
 
 
-def revalidate_grant(grant, intent):
-    """Owner checks a backend grant; total transport deadline is three seconds."""
+def revalidate_grant(grant, intent, *, timeout=3.):
+    """Owner checks a backend grant within the caller's remaining deadline."""
     from pathlib import Path
     try:
         if not isinstance(grant, dict) or grant.get('digest') != intent_digest(intent):
@@ -148,9 +148,12 @@ def revalidate_grant(grant, intent):
         directory = Path(grant['directory'])
         if not directory.is_absolute() or directory.is_symlink():
             return False
-        deadline = time.monotonic() + 3
+        if timeout <= 0:
+            return False
+        timeout = min(3., timeout)
+        deadline = time.monotonic() + timeout
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-            connection.settimeout(3)
+            connection.settimeout(timeout)
             with socket_address(directory) as address:
                 connection.connect(address)
             if peer_pid(connection) != identity['pid'] or process_identity(identity['pid']) != identity:

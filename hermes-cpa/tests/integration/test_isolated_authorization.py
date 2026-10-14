@@ -8,14 +8,15 @@ import pytest
 from hermes_cpa import authorization
 from hermes_cpa.installer import CpaInstaller, digest
 from hermes_cpa.settings import CpaSettings
+from runtime_fixtures import make_package, write_archive
 
 PACKAGE = Path(__file__).resolve().parents[2]
 
 
-def authorize(profile_home, path, **changes):
+def authorize(profile_home, path, package=PACKAGE, **changes):
     record = dict(version=1, purpose='isolated-candidate-test', home=str(profile_home.resolve()),
-                  package_root=str(PACKAGE.resolve()),
-                  manifest_sha256=digest(PACKAGE / 'compatibility.json'),
+                  package_root=str(package.resolve()),
+                  manifest_sha256=digest(package / 'compatibility.json'),
                   expires_at=time.time() + 300)
     record.update(changes)
     path.write_text(json.dumps(record))
@@ -48,13 +49,31 @@ def test_wrong_authorization_fails_closed(tmp_path, change):
 def test_explicit_authorization_does_not_skip_artifact_hashes(tmp_path):
     home = tmp_path / 'home'
     home.mkdir()
+    source = tmp_path / 'generated.tar.gz'
+    write_archive(source)
+    package = tmp_path / 'package'
+    manifest = make_package(package, source)
+    manifest.update(candidate_status='unaccepted; generated fixture', adr_status='Proposed',
+                    tested_minimum_hermes=None)
+    (package / 'compatibility.json').write_text(json.dumps(manifest))
     path = home / 'authorization.json'
-    authorize(home, path)
-    installer = CpaInstaller(CpaSettings(home), PACKAGE, isolated_authorization=path)
+    authorize(home, path, package=package)
+    installer = CpaInstaller(CpaSettings(home), package, isolated_authorization=path)
     with pytest.raises(ValueError, match='binary_mismatch'):
         installer._verify_content(b'not a binary')
     path.chmod(0o644)
     with pytest.raises(ValueError, match='isolated_authorization'):
+        installer._verify_content(b'not a binary')
+
+
+def test_authorization_never_admits_unpinned_packaged_runtime(tmp_path):
+    """The shipped package is either pinned (arbitrary bytes mismatch) or refused as unpinned."""
+    home = tmp_path / 'home'
+    home.mkdir()
+    path = home / 'authorization.json'
+    authorize(home, path)
+    installer = CpaInstaller(CpaSettings(home), PACKAGE, isolated_authorization=path)
+    with pytest.raises(ValueError, match='runtime_unpinned|binary_mismatch'):
         installer._verify_content(b'not a binary')
 
 

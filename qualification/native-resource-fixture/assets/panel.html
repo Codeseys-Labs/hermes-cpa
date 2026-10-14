@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>fixture:booting</title>
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+<script src="gzip-asset.js" defer></script>
+<script type="module" src="__BASE__/module.js"></script>
+</head>
+<body>
+<main id="fixture" data-plugin-id="__PLUGIN_ID__" data-generation="__GENERATION__" data-version="__VERSION__" data-base="__BASE__" data-state="booting">
+<h1>Hermes native resource fixture</h1>
+<p>Generation <span id="generation">__GENERATION__</span>, version <span id="version">__VERSION__</span>.</p>
+<p id="probe-css">css probe</p>
+<img id="probe-img" src="logo.png" width="16" height="16" alt="fixture image">
+<ol id="checks"></ol>
+
+<section id="effects">
+<button id="effect-button" type="button">Run one counted GET effect</button>
+<output id="effect-result"></output>
+</section>
+
+<section id="in-origin-navigation">
+<form id="get-form" method="get" action="form">
+<input type="text" name="q" value="a b">
+<input type="text" name="q" value="c&amp;d">
+<input type="text" name="enc" value="&#233;=%25;">
+<button id="submit-get-form" type="submit">Submit same-origin GET form</button>
+</form>
+<a id="relative-link" href="form?from=relative-link">same-origin relative link</a>
+<a id="redirect-link" href="redirect/start">same-origin redirect link</a>
+</section>
+
+<section id="outside-navigation">
+<button id="nav-location-outside" type="button">Navigate this frame outside</button>
+<button id="nav-open-outside" type="button">Open outside window</button>
+<button id="nav-link-outside" type="button">Click outside link (this frame)</button>
+<button id="nav-link-blank-outside" type="button">Click outside link (new window)</button>
+<button id="nav-form-outside" type="button">Submit outside form</button>
+<button id="nav-meta-outside" type="button">Insert outside meta refresh</button>
+<a id="outside-link-self" href="https://outside.invalid/hermes-fixture-link-self">outside link</a>
+<a id="outside-link-blank" href="https://outside.invalid/hermes-fixture-link-blank" target="_blank" rel="noopener">outside link, new window</a>
+<form id="outside-form" method="get" action="https://outside.invalid/hermes-fixture-form"><input type="hidden" name="probe" value="1"></form>
+</section>
+
+<pre id="fixture-report"></pre>
+</main>
+</body>
+</html>

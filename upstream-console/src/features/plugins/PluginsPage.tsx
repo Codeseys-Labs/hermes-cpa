@@ -37,6 +37,7 @@ import {
   notifyPluginResourcesChanged,
   resolvePluginAssetURL,
 } from './pluginResources';
+import { usePluginAssetSrc } from './pluginAssets';
 import { waitForPluginState } from './pluginPolling';
 import { getPluginLogo } from './pluginLogo';
 import styles from './PluginsPage.module.scss';
@@ -45,10 +46,11 @@ type PluginRuntimeWaitStatus = 'ready' | 'globalDisabled' | 'timeout';
 
 function PluginCardLogo({ src }: { src: string }) {
   const [failed, setFailed] = useState(false);
-  const showImage = Boolean(src) && !failed;
+  const displaySrc = usePluginAssetSrc(src);
+  const showImage = Boolean(displaySrc) && !failed;
 
   return showImage ? (
-    <img src={src} alt="" onError={() => setFailed(true)} />
+    <img src={displaySrc} alt="" onError={() => setFailed(true)} />
   ) : (
     <IconPlug size={18} />
   );

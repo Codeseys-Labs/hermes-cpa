@@ -14,6 +14,9 @@ import { useConfigStore } from './useConfigStore';
 import { useModelsStore } from './useModelsStore';
 import { useQuotaStore } from './useQuotaStore';
 import { detectApiBaseFromLocation, normalizeApiBase } from '@/utils/connection';
+import { isHosted } from '@/hosted/runtime';
+import { clearHostedStorage, getUiStorage } from '@/hosted/storage';
+import { getHostedTransport, lockHostedSession } from '@/hermesTransport';
 
 interface AuthStoreState extends AuthState {
   connectionStatus: ConnectionStatus;
@@ -28,6 +31,7 @@ interface AuthStoreState extends AuthState {
 }
 
 let restoreSessionPromise: Promise<boolean> | null = null;
+let hostedInitializationPromise: Promise<boolean> | null = null;
 
 export const useAuthStore = create<AuthStoreState>()(
   persist(
@@ -45,11 +49,15 @@ export const useAuthStore = create<AuthStoreState>()(
       // 恢复会话并自动登录
       restoreSession: () => {
         if (restoreSessionPromise) return restoreSessionPromise;
+        if (isHosted()) {
+          restoreSessionPromise = initializeHostedSession();
+          return restoreSessionPromise;
+        }
 
         restoreSessionPromise = (async () => {
           obfuscatedStorage.migratePlaintextKeys(['apiBase', 'apiUrl', 'managementKey']);
 
-          const wasLoggedIn = localStorage.getItem('isLoggedIn') === 'true';
+          const wasLoggedIn = getUiStorage('local').getItem('isLoggedIn') === 'true';
           const legacyBase =
             obfuscatedStorage.getItem<string>('apiBase') ||
             obfuscatedStorage.getItem<string>('apiUrl', { encrypt: true });
@@ -92,6 +100,10 @@ export const useAuthStore = create<AuthStoreState>()(
 
       // 登录
       login: async (credentials) => {
+        if (isHosted()) {
+          if (!(await initializeHostedSession())) throw new Error('Console is locked');
+          return;
+        }
         const apiBase = normalizeApiBase(credentials.apiBase);
         const managementKey = credentials.managementKey.trim();
         const rememberPassword = credentials.rememberPassword ?? get().rememberPassword ?? false;
@@ -138,9 +150,9 @@ export const useAuthStore = create<AuthStoreState>()(
             connectionStatus: 'connected',
           });
           if (rememberPassword) {
-            localStorage.setItem('isLoggedIn', 'true');
+            getUiStorage('local').setItem('isLoggedIn', 'true');
           } else {
-            localStorage.removeItem('isLoggedIn');
+            getUiStorage('local').removeItem('isLoggedIn');
           }
         } catch (error: unknown) {
           set({ connectionStatus: 'error' });
@@ -150,7 +162,12 @@ export const useAuthStore = create<AuthStoreState>()(
 
       // 登出
       logout: () => {
+        if (isHosted()) {
+          if (getHostedTransport().unlocked) void lockHostedSession();
+          clearHostedStorage();
+        }
         restoreSessionPromise = null;
+        hostedInitializationPromise = null;
         apiClient.setConfig({ apiBase: '', managementKey: '' });
         useConfigStore.getState().clearCache();
         useModelsStore.getState().clearCache();
@@ -164,11 +181,20 @@ export const useAuthStore = create<AuthStoreState>()(
           supportsPlugin: false,
           connectionStatus: 'disconnected',
         });
-        localStorage.removeItem('isLoggedIn');
+        getUiStorage('local').removeItem('isLoggedIn');
       },
 
       // 检查认证状态
       checkAuth: async () => {
+        if (isHosted()) {
+          if (!getHostedTransport().unlocked) return false;
+          try {
+            await useConfigStore.getState().fetchConfig();
+            return getHostedTransport().unlocked && get().isAuthenticated;
+          } catch {
+            return false;
+          }
+        }
         const { managementKey, apiBase } = get();
 
         if (!managementKey || !apiBase) {
@@ -225,7 +251,7 @@ export const useAuthStore = create<AuthStoreState>()(
           obfuscatedStorage.removeItem(name);
         },
       })),
-      partialize: (state) => ({
+      partialize: (state) => isHosted() ? {} : ({
         apiBase: state.apiBase,
         ...(state.rememberPassword ? { managementKey: state.managementKey } : {}),
         rememberPassword: state.rememberPassword,
@@ -236,8 +262,41 @@ export const useAuthStore = create<AuthStoreState>()(
   )
 );
 
+/** Only a real, explicitly unlocked host channel can authenticate the embedded console. */
+export async function initializeHostedSession(): Promise<boolean> {
+  if (!isHosted()) return useAuthStore.getState().restoreSession();
+  if (hostedInitializationPromise) return hostedInitializationPromise;
+  const channel = getHostedTransport();
+  hostedInitializationPromise = (async () => {
+    try {
+      await channel.ready;
+      if (!channel.unlocked) return false;
+      if (useAuthStore.getState().isAuthenticated) return true;
+      useAuthStore.setState({ connectionStatus: 'connecting' });
+      apiClient.setConfig({ apiBase: '', managementKey: '' });
+      useConfigStore.getState().clearCache();
+      useModelsStore.getState().clearCache();
+      useQuotaStore.getState().clearQuotaCache();
+      await useConfigStore.getState().fetchConfig(true);
+      if (!channel.unlocked) return false;
+      useAuthStore.setState({
+        isAuthenticated: true, apiBase: '', managementKey: '', rememberPassword: false,
+        connectionStatus: 'connected',
+      });
+      return true;
+    } catch {
+      useAuthStore.getState().logout();
+      return false;
+    }
+  })();
+  return hostedInitializationPromise;
+}
+
 // 监听全局未授权事件
 if (typeof window !== 'undefined') {
+  window.addEventListener('hermes-console-locked', () => {
+    if (isHosted()) useAuthStore.getState().logout();
+  });
   window.addEventListener('unauthorized', () => {
     useAuthStore.getState().logout();
   });

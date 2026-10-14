@@ -1,6 +1,7 @@
 /** Client access keys are a direct config list, not upstream provider groups. */
 import { apiClient } from './client';
 import { getConfigValue, guardConfigConnection } from './configValue';
+import { configRevisionArgs, inheritConfigRevision } from './configRevision';
 
 const PATH = '/config/access/api-keys';
 
@@ -13,7 +14,9 @@ const assertIndex = (keys: string[], index: number): void => {
 export const apiKeysApi = {
   async list(): Promise<string[]> {
     const data = await getConfigValue<unknown>(PATH, []);
-    return Array.isArray(data) ? data.map((key) => String(key)) : [];
+    const keys = Array.isArray(data) ? data.map((key) => String(key)) : [];
+    inheritConfigRevision(data, keys);
+    return keys;
   },
 
   replace: (keys: string[]) => apiClient.put(PATH, keys),
@@ -24,7 +27,7 @@ export const apiKeysApi = {
     assertConnection();
     assertIndex(keys, index);
     keys[index] = value;
-    return apiKeysApi.replace(keys);
+    return apiClient.put(PATH, keys, ...configRevisionArgs(keys));
   },
 
   async delete(index: number) {
@@ -33,6 +36,6 @@ export const apiKeysApi = {
     assertConnection();
     assertIndex(keys, index);
     keys.splice(index, 1);
-    return apiKeysApi.replace(keys);
+    return apiClient.put(PATH, keys, ...configRevisionArgs(keys));
   },
 };

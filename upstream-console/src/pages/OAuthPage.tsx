@@ -8,10 +8,12 @@ import { IconPlug } from '@/components/ui/icons';
 import { useAuthStore, useNotificationStore, useThemeStore } from '@/stores';
 import { oauthApi, pluginsApi, type BuiltInOAuthProvider } from '@/services/api';
 import { vertexApi, type VertexImportResponse } from '@/services/api/vertex';
+import { openExternal } from '@/hosted/browser';
 import { copyToClipboard } from '@/utils/clipboard';
 import { getErrorMessage, isRecord } from '@/utils/helpers';
 import { notifyAuthFilesChanged } from '@/features/authFiles/authFilesEvents';
 import { getPluginTitle, resolvePluginAssetURL } from '@/features/plugins/pluginResources';
+import { usePluginAssetSrc } from '@/features/plugins/pluginAssets';
 import {
   KIMI_CHINESE_AFFILIATE_URL,
   KIMI_INTERNATIONAL_AFFILIATE_URL,
@@ -149,9 +151,15 @@ const getIcon = (icon: string | { light: string; dark: string }, theme: 'light' 
 
 function PluginOAuthIcon({ src }: { src: string }) {
   const [failed, setFailed] = useState(false);
-  if (src && !failed) {
+  const displaySrc = usePluginAssetSrc(src);
+  if (displaySrc && !failed) {
     return (
-      <img src={src} alt="" className={styles.cardTitleIcon} onError={() => setFailed(true)} />
+      <img
+        src={displaySrc}
+        alt=""
+        className={styles.cardTitleIcon}
+        onError={() => setFailed(true)}
+      />
     );
   }
   return (
@@ -532,6 +540,14 @@ export function OAuthPage() {
     );
   };
 
+  const openLink = async (url: string) => {
+    try {
+      await openExternal(url);
+    } catch (err: unknown) {
+      showNotification(getErrorMessage(err, t('notification.open_link_failed')), 'error');
+    }
+  };
+
   const submitCallback = async (provider: string) => {
     const attempt = attempts.current.get(provider);
     if (!attempt?.isCurrent()) return;
@@ -694,12 +710,10 @@ export function OAuthPage() {
             <div className={styles.featuredActions}>
               <Button
                 onClick={() =>
-                  window.open(
+                  void openLink(
                     provider.id === 'kimi-ai'
                       ? KIMI_INTERNATIONAL_AFFILIATE_URL
-                      : KIMI_CHINESE_AFFILIATE_URL,
-                    '_blank',
-                    'noopener,noreferrer'
+                      : KIMI_CHINESE_AFFILIATE_URL
                   )
                 }
               >
@@ -746,7 +760,7 @@ export function OAuthPage() {
                 <Button
                   variant="secondary"
                   size="sm"
-                  onClick={() => window.open(state.url, '_blank', 'noopener,noreferrer')}
+                  onClick={() => void openLink(state.url!)}
                 >
                   {getProviderText(provider, 'open_link')}
                 </Button>

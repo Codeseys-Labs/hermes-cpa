@@ -1,0 +1,32 @@
+# Build with the repository root as context and export the artifact stage locally.
+FROM --platform=linux/amd64 python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 AS toolchain
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates gcc libc6-dev binutils \
+    && rm -rf /var/lib/apt/lists/*
+ADD --checksum=sha256:42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d https://go.dev/dl/go1.26.9.linux-amd64.tar.gz /tmp/go.tar.gz
+RUN mkdir -p /opt/q/.verification/toolchains/go1.26.9 \
+    && tar -xzf /tmp/go.tar.gz --strip-components=1 -C /opt/q/.verification/toolchains/go1.26.9 \
+    && rm /tmp/go.tar.gz
+ENV GOTOOLCHAIN=local GOMAXPROCS=4
+WORKDIR /opt/q
+
+FROM toolchain AS build
+COPY runtime-integration /opt/q/runtime-integration
+COPY scripts/build_cpa_runtime.py scripts/cpa_runtime_common.py /opt/q/scripts/
+COPY hermes-cpa/cpa-runtime.json hermes-cpa/compatibility.json /opt/q/hermes-cpa/
+ADD --keep-git-dir=true https://github.com/router-for-me/CLIProxyAPI.git#54946fa3dfa29c6ca7312ac141a92cdd5e413771 /opt/q/.verification/cpa-source
+COPY hermes-cpa/src/hermes_cpa/runtime_manifest.py /opt/q/hermes-cpa/src/hermes_cpa/runtime_manifest.py
+RUN python /opt/q/scripts/build_cpa_runtime.py --source /opt/q/.verification/cpa-source
+
+FROM build AS gates
+WORKDIR /opt/q/.verification/cpa-source
+ENV PATH=/opt/q/.verification/toolchains/go1.26.9/bin:$PATH \
+    GOMODCACHE=/opt/q/.verification/go-mod-cache CGO_ENABLED=1
+RUN git apply /opt/q/runtime-integration/patches/0001-hermes-owner-v1.patch \
+    && go mod download
+RUN --network=none go vet -p=4 ./... \
+    && go test -p=4 ./internal/hermesowner/... ./internal/api/... ./internal/pluginhost/... ./cmd/server/...
+
+FROM scratch AS artifact
+COPY --from=gates /opt/q/dist/cpa-runtime/ /
+COPY --from=gates /opt/q/hermes-cpa/cpa-runtime.json /cpa-runtime.json
+COPY --from=gates /opt/q/hermes-cpa/compatibility.json /compatibility.json

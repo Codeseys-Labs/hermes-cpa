@@ -91,10 +91,17 @@
   },
   "header": {
     "refresh_all": "刷新全部",
-    "logout": "登出"
+    "logout": "登出",
+    "lock_console": "锁定控制台"
   },
   "connection": {
     "status": "连接状态:"
+  },
+  "hosted": {
+    "locked_title": "控制台已锁定",
+    "locked_desc": "此控制台会话已结束。请在 Hermes 仪表盘中重新解锁后继续。",
+    "unavailable_title": "控制台不可用",
+    "unavailable_desc": "宿主未提供已解锁的管理会话。请在 Hermes 仪表盘中解锁控制台并重新加载。"
   },
   "nav": {
     "dashboard": "仪表盘",
@@ -297,6 +304,8 @@
     "upload_error_json": "只能上传JSON文件",
     "upload_error_size": "文件大小不能超过 {{maxSize}}",
     "upload_success": "文件上传成功",
+    "upload_outcome_unknown": "以下文件的上传结果未知：{{files}}。未自动重试；再次上传前请先检查凭证列表。",
+    "upload_not_attempted": "未上传：{{files}}。",
     "download_success": "文件下载成功",
     "delete_success": "文件删除成功",
     "delete_all_success": "成功删除",
@@ -1753,7 +1762,10 @@
     "not_found": "未找到插件页面",
     "not_found_desc": "该插件页面未在当前后端插件列表中声明。",
     "empty_src": "插件页面地址为空",
-    "empty_src_desc": "该插件菜单未提供可嵌入的页面地址。"
+    "empty_src_desc": "该插件菜单未提供可嵌入的页面地址。",
+    "host_open": "打开插件页面",
+    "host_open_failed": "打开插件页面失败",
+    "host_presentation_desc": "{{plugin}} 在独立的宿主窗口中运行，无法访问此控制台、其会话或 Hermes。"
   },
   "system_info": {
     "title": "管理中心信息",
@@ -1781,7 +1793,12 @@
     "clear_login_title": "本地登录信息",
     "clear_login_desc": "清理本地保存的登录信息并退出登录。",
     "clear_login_button": "清理登录信息",
-    "clear_login_confirm": "确认清理本地登录信息并退出登录？"
+    "clear_login_confirm": "确认清理本地登录信息并退出登录？",
+    "lock_console_title": "控制台会话",
+    "lock_console_desc": "锁定此控制台，需在 Hermes 仪表盘中重新解锁。",
+    "lock_console_confirm": "现在锁定控制台吗？尚未被接受的待处理操作将被取消。",
+    "lock_console_button": "锁定控制台",
+    "hosted_connection": "Hermes 托管的 CPA"
   },
   "notification": {
     "trusted_proxies_restart_required": "可信代理配置已保存，重启后端后生效。",
@@ -1803,7 +1820,8 @@
     "login_failed": "登录失败",
     "commercial_mode_restart_required": "商业模式开关已变更，请重启服务后生效",
     "copy_failed": "复制失败",
-    "link_copied": "已复制"
+    "link_copied": "已复制",
+    "open_link_failed": "打开链接失败"
   },
   "language": {
     "switch": "语言",

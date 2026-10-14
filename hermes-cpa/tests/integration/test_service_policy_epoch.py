@@ -23,7 +23,7 @@ def policy_home(tmp_path, monkeypatch):
         cfg = load_config()
         cfg.setdefault('plugins', {})['enabled'] = ['hermes-cpa']
         cfg['plugins'].setdefault('entries', {})['hermes-cpa'] = {
-            'settings': {'mode': 'managed', 'managed_port': 8318, 'autostart': True}}
+            'settings': {'mode': 'managed', 'broker_port': 8319, 'autostart': True}}
         save_config(cfg)
         yield home, package
     finally:
@@ -73,7 +73,7 @@ def test_disable_reenable_through_hermes_revokes_without_intermediate_sample(pol
 
 @pytest.mark.parametrize('change,replace', [
     (lambda cfg: cfg['plugins']['entries']['hermes-cpa']['settings'].update(mode='external'), False),
-    (lambda cfg: cfg['plugins']['entries']['hermes-cpa']['settings'].update(managed_port=8320), False),
+    (lambda cfg: cfg['plugins']['entries']['hermes-cpa']['settings'].update(broker_port=8320), False),
     (lambda cfg: cfg['plugins']['entries'].pop('hermes-cpa'), True),
     (lambda cfg: enable(cfg, False), False),
 ])

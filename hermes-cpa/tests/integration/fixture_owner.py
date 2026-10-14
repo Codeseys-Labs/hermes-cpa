@@ -11,10 +11,9 @@ from hermes_cpa.supervisor import CpaSupervisor, InstallPolicy
 parser = argparse.ArgumentParser()
 parser.add_argument('home')
 parser.add_argument('package')
-parser.add_argument('port', type=int)
 args = parser.parse_args()
 settings = CpaSettings(Path(args.home))
-owner = CpaSupervisor(settings, mode='managed', port=args.port,
+owner = CpaSupervisor(settings, mode='managed',
     probe=lambda timeout: SimpleNamespace(management_ready=True, compatible=True,
                                          inference_configured=False),
     policy=InstallPolicy(settings.home, Path(args.package)),

@@ -16,6 +16,10 @@ import {
 } from '@/utils/recentRequests';
 import { parseTimestampMs } from '@/utils/timestamp';
 import { normalizeAuthFileCooldowns, normalizeCooldownTimestamp } from './authFileCooldowns';
+import { isHosted } from '@/hosted/runtime';
+import { MAX_FILE_BYTES } from '@/hosted/management';
+import { getHostedTransport, HostRequestError } from '@/hermesTransport';
+import { configRevisionArgs } from './configRevision';
 
 type AuthFileStatusResponse = { status: string; disabled: boolean };
 export type AuthFileLookup = { name: string; authIndex?: string };
@@ -67,6 +71,8 @@ type AuthFileBatchUploadResult = {
   uploaded: number;
   files: string[];
   failed: AuthFileBatchFailure[];
+  uncertain?: string[];
+  notAttempted?: string[];
 };
 type AuthFileBatchDeleteResult = {
   status: string;
@@ -482,7 +488,7 @@ async function updateOauthProviderMap(path: string, provider: string, value?: un
         writable: true,
       });
     }
-    await apiClient.put(path, next);
+    await apiClient.put(path, next, ...configRevisionArgs(current));
   });
 }
 
@@ -565,6 +571,44 @@ export const authFilesApi = {
     const requestedNames = files.map((file) => file.name);
     if (requestedNames.length === 0) {
       return { status: 'ok', uploaded: 0, files: [], failed: [] };
+    }
+
+    if (isHosted()) {
+      const result: AuthFileBatchUploadResult = { status: 'ok', uploaded: 0, files: [], failed: [] };
+      for (const [index, file] of files.entries()) {
+        if (file.size > MAX_FILE_BYTES) {
+          result.failed.push({ name: file.name, error: 'File exceeds the 10 MiB upload limit' });
+          continue;
+        }
+        const form = new FormData();
+        form.append('file', file, file.name);
+        try {
+          const payload = await apiClient.postForm<AuthFileBatchUploadResponse>('/credentials', form);
+          if (!payload || (payload.uploaded === undefined && payload.status !== 'ok' &&
+              normalizeBatchFailures(payload.failed).length === 0)) {
+            getHostedTransport().close();
+            throw new HostRequestError('outcome-unknown',
+              'Upload returned no terminal receipt; reconcile without resubmitting');
+          }
+          const part = normalizeBatchUploadResponse(payload, [file.name]);
+          result.uploaded += part.uploaded;
+          result.files.push(...part.files);
+          result.failed.push(...part.failed);
+        } catch (error) {
+          if (error instanceof HostRequestError) {
+            result.status = error.kind === 'outcome-unknown' ? 'unknown' : 'partial';
+            if (error.kind === 'outcome-unknown') result.uncertain = [file.name];
+            else result.failed.push({ name: file.name, error: error.message });
+            result.notAttempted = files.slice(index + 1).map((entry) => entry.name);
+            return result;
+          }
+          result.failed.push({
+            name: file.name, error: error instanceof Error ? error.message : 'Upload failed',
+          });
+        }
+      }
+      result.status = result.failed.length ? 'partial' : 'ok';
+      return result;
     }
 
     const formData = new FormData();

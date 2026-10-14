@@ -3,7 +3,7 @@
  * 替代原项目 src/core/api-client.js
  */
 
-import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios';
+import axios, { AxiosInstance, AxiosResponse } from 'axios';
 import type { ApiClientConfig, ApiError } from '@/types';
 import {
   BUILD_DATE_HEADER_KEYS,
@@ -15,6 +15,10 @@ import {
 } from '@/utils/constants';
 import { computeApiUrl } from '@/utils/connection';
 import { parseApiErrorResponse } from './apiError';
+import { isHosted } from '@/hosted/runtime';
+import { HostRequestError, lockHostedSession } from '@/hermesTransport';
+import { clearHostedConfigRevision, getHostedConfigRevision, hostedAxiosAdapter } from './hostedAdapter';
+import type { ManagementClientConfig } from './hostedAdapter';
 
 class ApiClient {
   private instance: AxiosInstance;
@@ -37,12 +41,15 @@ class ApiClient {
    * 设置 API 配置
    */
   setConfig(config: ApiClientConfig): void {
-    const apiBase = computeApiUrl(config.apiBase);
-    if (apiBase !== this.apiBase || config.managementKey !== this.managementKey) {
+    const hosted = isHosted();
+    const apiBase = hosted ? '' : computeApiUrl(config.apiBase);
+    const managementKey = hosted ? '' : config.managementKey;
+    if (hosted || apiBase !== this.apiBase || managementKey !== this.managementKey) {
       this.connectionRevision += 1;
+      clearHostedConfigRevision();
     }
     this.apiBase = apiBase;
-    this.managementKey = config.managementKey;
+    this.managementKey = managementKey;
 
     if (config.timeout) {
       this.instance.defaults.timeout = config.timeout;
@@ -54,6 +61,10 @@ class ApiClient {
   /** Guards read/modify/write operations across connection changes, including ABA switches. */
   getConnectionRevision(): number {
     return this.connectionRevision;
+  }
+
+  getConfigRevision(): string | undefined {
+    return getHostedConfigRevision();
   }
 
   private readHeader(headers: Record<string, unknown> | undefined, keys: string[]): string | null {
@@ -114,6 +125,15 @@ class ApiClient {
     // 请求拦截器
     this.instance.interceptors.request.use(
       (config) => {
+        if (isHosted()) {
+          // A caller-supplied Axios adapter or URL must never bypass the hosted channel.
+          config.adapter = hostedAxiosAdapter;
+          config.baseURL = '';
+          config.headers.delete('Authorization');
+          config.headers.delete('Cookie');
+          config.headers.delete('Host');
+          return config;
+        }
         // 设置 baseURL
         config.baseURL = this.apiBase;
 
@@ -163,7 +183,16 @@ class ApiClient {
    * 错误处理
    */
   private handleError(error: unknown): ApiError {
+    if (error instanceof HostRequestError) return error;
     if (axios.isAxiosError(error)) {
+      if (isHosted() && error.code === 'ERR_CANCELED' &&
+          (error.config?.method?.toUpperCase() !== 'GET' ||
+           error.config?.url?.split('?')[0].endsWith('/oauth/auth-url'))) {
+        // Aborting the UI promise is not proof that the owner rejected an admitted effect.
+        void lockHostedSession();
+        return new HostRequestError('outcome-unknown',
+          'Outcome unknown; reconcile in the host without resubmitting');
+      }
       const responseData: unknown = error.response?.data;
       const parsedError = parseApiErrorResponse(responseData, error.message);
       const apiError = new Error(parsedError.message) as ApiError;
@@ -196,7 +225,7 @@ class ApiClient {
   /**
    * GET 请求
    */
-  async get<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<T> {
+  async get<T = unknown>(url: string, config?: ManagementClientConfig): Promise<T> {
     const response = await this.instance.get<T>(url, config);
     return response.data;
   }
@@ -204,7 +233,7 @@ class ApiClient {
   /**
    * POST 请求
    */
-  async post<T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
+  async post<T = unknown>(url: string, data?: unknown, config?: ManagementClientConfig): Promise<T> {
     const response = await this.instance.post<T>(url, data, config);
     return response.data;
   }
@@ -212,31 +241,40 @@ class ApiClient {
   /**
    * PUT 请求
    */
-  async put<T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
-    const response = await this.instance.put<T>(url, data, config);
+  async put<T = unknown>(url: string, data?: unknown, config?: ManagementClientConfig): Promise<T> {
+    const requestConfig: ManagementClientConfig = {
+      ...config, hermesExpectedRevision: config?.hermesExpectedRevision ?? getHostedConfigRevision(),
+    };
+    const response = await this.instance.put<T>(url, data, requestConfig);
     return response.data;
   }
 
   /**
    * PATCH 请求
    */
-  async patch<T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
-    const response = await this.instance.patch<T>(url, data, config);
+  async patch<T = unknown>(url: string, data?: unknown, config?: ManagementClientConfig): Promise<T> {
+    const requestConfig: ManagementClientConfig = {
+      ...config, hermesExpectedRevision: config?.hermesExpectedRevision ?? getHostedConfigRevision(),
+    };
+    const response = await this.instance.patch<T>(url, data, requestConfig);
     return response.data;
   }
 
   /**
    * DELETE 请求
    */
-  async delete<T = unknown>(url: string, config?: AxiosRequestConfig): Promise<T> {
-    const response = await this.instance.delete<T>(url, config);
+  async delete<T = unknown>(url: string, config?: ManagementClientConfig): Promise<T> {
+    const requestConfig: ManagementClientConfig = {
+      ...config, hermesExpectedRevision: config?.hermesExpectedRevision ?? getHostedConfigRevision(),
+    };
+    const response = await this.instance.delete<T>(url, requestConfig);
     return response.data;
   }
 
   /**
    * 获取原始响应（用于下载等场景）
    */
-  async getRaw(url: string, config?: AxiosRequestConfig): Promise<AxiosResponse> {
+  async getRaw(url: string, config?: ManagementClientConfig): Promise<AxiosResponse> {
     return this.instance.get(url, config);
   }
 
@@ -246,7 +284,7 @@ class ApiClient {
   async postForm<T = unknown>(
     url: string,
     formData: FormData,
-    config?: AxiosRequestConfig
+    config?: ManagementClientConfig
   ): Promise<T> {
     const response = await this.instance.post<T>(url, formData, {
       ...config,

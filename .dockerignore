@@ -2,16 +2,40 @@
 **
 !scripts/
 !scripts/qualification.py
+!scripts/build_cpa_runtime.py
+!scripts/cpa_runtime_common.py
+!runtime-integration/
+!runtime-integration/**
 !host-integration/
 !host-integration/**
 !hermes-cpa/
 !hermes-cpa/**
 !qualification/
 !qualification/Dockerfile
+!qualification/Dockerfile.runtime
+!qualification/Dockerfile.oauth
+!qualification/Dockerfile.ui
 !qualification/Dockerfile.tests
 !qualification/Dockerfile.tests.dockerignore
 !qualification/provider_smoke.py
+!qualification/console_client.py
+!qualification/oauth_fixture.py
+!qualification/parity_smoke.py
+!qualification/desktop_prepare.py
+!qualification/ui_oauth_fixture.py
+!qualification/desktop-parity.spec.ts
+!qualification/native-resource-ui.ts
+!qualification/dashboard-parity.spec.ts
+!qualification/dashboard_scenario.py
 !qualification/test_qualification.py
+!qualification/resource_smoke.py
+!qualification/native-resource-fixture/
+!qualification/native-resource-fixture/Dockerfile.*
+!qualification/native-resource-fixture/*.py
+!qualification/native-resource-fixture/*.go
+!qualification/native-resource-fixture/go.mod
+!qualification/native-resource-fixture/assets/
+!qualification/native-resource-fixture/assets/*
 
 # Denials follow the allowlist so they win even inside included trees. This is
 # exactly the scripts/qualification.py package_files list: names, prefixes

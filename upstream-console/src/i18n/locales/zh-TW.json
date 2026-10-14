@@ -91,10 +91,17 @@
   },
   "header": {
     "refresh_all": "全部重新整理",
-    "logout": "登出"
+    "logout": "登出",
+    "lock_console": "鎖定主控台"
   },
   "connection": {
     "status": "連線狀態:"
+  },
+  "hosted": {
+    "locked_title": "主控台已鎖定",
+    "locked_desc": "此主控台工作階段已結束。請在 Hermes 儀表板重新解鎖後繼續。",
+    "unavailable_title": "主控台無法使用",
+    "unavailable_desc": "宿主未提供已解鎖的管理工作階段。請在 Hermes 儀表板解鎖主控台並重新載入。"
   },
   "nav": {
     "dashboard": "儀表板",
@@ -297,6 +304,8 @@
     "upload_error_json": "只能上傳 JSON 檔案",
     "upload_error_size": "檔案大小不能超過 {{maxSize}}",
     "upload_success": "檔案上傳成功",
+    "upload_outcome_unknown": "以下檔案的上傳結果未知：{{files}}。未自動重試；再次上傳前請先檢查憑證清單。",
+    "upload_not_attempted": "未上傳：{{files}}。",
     "download_success": "檔案下載成功",
     "delete_success": "檔案刪除成功",
     "delete_all_success": "成功刪除",
@@ -1779,7 +1788,10 @@
     "not_found": "找不到插件頁面",
     "not_found_desc": "目前後端插件清單未宣告此插件頁面。",
     "empty_src": "插件頁面位址為空",
-    "empty_src_desc": "此插件選單未提供可嵌入的頁面位址。"
+    "empty_src_desc": "此插件選單未提供可嵌入的頁面位址。",
+    "host_open": "開啟插件頁面",
+    "host_open_failed": "開啟插件頁面失敗",
+    "host_presentation_desc": "{{plugin}} 在獨立的宿主視窗中執行，無法存取此主控台、其工作階段或 Hermes。"
   },
   "system_info": {
     "title": "管理中心資訊",
@@ -1807,7 +1819,12 @@
     "clear_login_title": "本地登入資訊",
     "clear_login_desc": "清理本地儲存的登入資訊並登出。",
     "clear_login_button": "清理登入資訊",
-    "clear_login_confirm": "確認清理本地登入資訊並登出？"
+    "clear_login_confirm": "確認清理本地登入資訊並登出？",
+    "lock_console_title": "主控台工作階段",
+    "lock_console_desc": "鎖定此主控台，需在 Hermes 儀表板重新解鎖。",
+    "lock_console_confirm": "現在鎖定主控台嗎？尚未被接受的待處理操作將被取消。",
+    "lock_console_button": "鎖定主控台",
+    "hosted_connection": "Hermes 託管的 CPA"
   },
   "notification": {
     "trusted_proxies_restart_required": "可信任代理設定已儲存，重新啟動後端後生效。",
@@ -1829,7 +1846,8 @@
     "login_failed": "登入失敗",
     "commercial_mode_restart_required": "商業模式開關已變更，請重啟服務後生效",
     "copy_failed": "複製失敗",
-    "link_copied": "已複製"
+    "link_copied": "已複製",
+    "open_link_failed": "開啟連結失敗"
   },
   "language": {
     "switch": "語言",

@@ -1,4 +1,5 @@
 import type { Language } from '@/types';
+import { getUiStorage } from '@/hosted/storage';
 import { STORAGE_KEY_LANGUAGE, SUPPORTED_LANGUAGES } from '@/utils/constants';
 
 const TRADITIONAL_CHINESE_PREFIXES = ['zh-tw', 'zh-hk', 'zh-mo', 'zh-hant'] as const;
@@ -26,7 +27,7 @@ const getStoredLanguage = (): Language | null => {
     return null;
   }
   try {
-    const stored = localStorage.getItem(STORAGE_KEY_LANGUAGE);
+    const stored = getUiStorage('local').getItem(STORAGE_KEY_LANGUAGE);
     if (!stored) {
       return null;
     }

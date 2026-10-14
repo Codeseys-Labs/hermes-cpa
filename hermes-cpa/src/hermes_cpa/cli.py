@@ -12,12 +12,14 @@ def build_parser(parser=None) -> argparse.ArgumentParser:
     sub.add_parser("stop", help="Stop managed CPA instance")
     sub.add_parser("restart", help="Restart managed CPA instance")
     sub.add_parser("doctor", help="Run CPA diagnostic health checks")
-    managed = sub.add_parser("setup", help="Consented managed setup: verify, prepare keys/config, "
-                             "start the owned CPA and broker, enroll the provider")
+    managed = sub.add_parser("setup", help="Consented managed setup: verify, prepare config with a fresh "
+                             "public access key, start the owned CPA and broker, enroll the provider")
     source = managed.add_mutually_exclusive_group(required=True)
-    source.add_argument("--archive", help="Local pinned CPA 8.0.21 linux_amd64 release archive")
+    source.add_argument("--archive", help="Local hermes-owner-v1 CPA 8.0.21 linux_amd64 runtime archive "
+                        "(built by scripts/build_cpa_runtime.py)")
     source.add_argument("--download", action="store_true",
-                        help="Fetch the fixed checksum-pinned upstream release")
+                        help="Fetch the fixed private candidate runtime asset with an authenticated "
+                        "`gh` CLI; never the stock CPA release")
     managed.add_argument("--port", type=int, default=8318)
     managed.add_argument("--broker-port", type=int, default=8319,
                          help="Inference broker port; default profile only")
@@ -31,9 +33,9 @@ def build_parser(parser=None) -> argparse.ArgumentParser:
                          help="Explicit expiring disposable candidate permit, not release approval")
 
     setup = sub.add_parser("init", help="Offline native onboarding; no automatic CPA start")
-    setup.add_argument("--archive", required=True, help="Local pinned CPA release archive")
+    setup.add_argument("--archive", required=True, help="Local hermes-owner-v1 runtime archive")
     setup.add_argument("--port", type=int, default=8318)
-    setup.add_argument("--consent", action="store_true", help="Create profile-scoped keys and managed config")
+    setup.add_argument("--consent", action="store_true", help="Create the managed config with a fresh public access key")
     setup.add_argument("--isolated-authorization", help="Explicit expiring disposable candidate permit, not release approval")
 
     autostart = sub.add_parser("autostart", help="Remember or forget managed startup with Hermes")
@@ -205,6 +207,13 @@ def main(args=None):
         print(f"Lifecycle: {st.lifecycle.value}")
         print(f"Binary Exists: {controller.settings.binary_path.exists()}")
         print(f"Config Exists: {controller.settings.config_path.exists()}")
+        try:
+            from .installer import CpaInstaller
+            runtime = CpaInstaller(controller.settings, controller.package_root).runtime_manifest()
+            print(f"Runtime Integration: {runtime.data['integration']} "
+                  f"(artifact pinned: {runtime.pinned})")
+        except Exception:
+            print("Runtime Integration: unavailable (package metadata missing or invalid)")
         recovery = controller.recovery_status()
         for key, label in [('owner_available', 'Owner Available'), ('generation', 'Generation'),
                            ('current_revision', 'Current Revision'), ('snapshot_revision', 'Snapshot Revision'),
@@ -220,8 +229,12 @@ def main(args=None):
 
 def _report_setup(outcome):
     """Print what is actually running after this command returns."""
-    print("Prepared: separate management and inference keys, pinned executable and CPA config; "
-          "mode is managed.")
+    print("Prepared: pinned hermes-owner-v1 executable and CPA config; mode is managed. No private "
+          "CPA key was created; the owner and broker use private owner-only channels.")
+    print(f"Public access: a fresh public API key was generated into {outcome['config_path']} (mode "
+          "0600, access.api-keys) and public management is disabled. Both are your configuration: "
+          "view or change them in the CPAMC console or the config file; changing them never affects "
+          "the private broker.")
     if outcome['owner'] == 'running' and outcome['lifetime'] == 'persistent':
         print("Owner: running with persistent lifetime. It keeps running after this command until "
               "`hermes cpa stop`, plugin disable/removal or a relevant policy change.")

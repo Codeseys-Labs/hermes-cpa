@@ -1,5 +1,4 @@
 """Explicit recovery must compare both current bytes and the selected snapshot."""
-import hashlib
 import json
 
 import pytest
@@ -10,12 +9,13 @@ from hermes_cpa.config_store import ConfigStore
 @pytest.fixture
 def recovery(tmp_path):
     store = ConfigStore(tmp_path / 'config.yaml')
-    store.create_initial_config(18318, 'generated-management', 'generated-inference')
+    store.create_initial_config(18318, access_keys=['generated-public-client-key'])
     original = store.compute_digest()
     store.snapshot()
-    store.apply_safe_changes(original, {'request_retry': 4})
+    # An interrupted transaction: candidate bytes published, journal unfinished.
+    store._write_in_place(store.config_path.read_bytes().replace(b'request-retry: 3', b'request-retry: 4'))
     store._journal('applying', original)
-    owner = Owner()
+    owner = Owner(store)
     owner.running = False
     return store, owner, original
 
@@ -28,11 +28,13 @@ def recover(bundle, **overrides):
     return store.recover(**args)
 
 
-def test_explicit_recovery_restores_snapshot_without_starting(recovery):
+def test_explicit_recovery_restores_snapshot_in_place_without_starting(recovery):
     store, owner, original = recovery
+    inode = store.config_path.stat().st_ino
     result = recover(recovery)
     assert result['ok']
     assert store.compute_digest() == original
+    assert store.config_path.stat().st_ino == inode
     assert owner.calls == ['owned', 'stop']
     assert not owner.running
     assert json.loads(store._read_bytes(store.config_path.with_suffix('.journal')))['phase'] == 'recovered'
@@ -86,12 +88,9 @@ def test_recovery_rechecks_snapshot_after_stop(recovery):
 
 def test_recovery_io_failure_retains_blocking_journal(recovery, monkeypatch):
     store, _, _ = recovery
-    original = store._atomic
-    def fail(path, raw):
-        if path == store.config_path:
-            raise OSError('GENERATED_PRIVATE_ERROR')
-        return original(path, raw)
-    monkeypatch.setattr(store, '_atomic', fail)
+    def fail(raw):
+        raise OSError('GENERATED_PRIVATE_ERROR')
+    monkeypatch.setattr(store, '_write_in_place', fail)
     result = recover(recovery)
     assert result['code'] == 'RECOVERY_FAILED'
     assert 'GENERATED_PRIVATE_ERROR' not in str(result)
@@ -108,17 +107,20 @@ def test_recovery_requires_unfinished_journal(recovery):
 @pytest.mark.parametrize('boundary', ['restore', 'commit'])
 def test_recovery_revocation_during_restore_never_reports_success(recovery, monkeypatch, boundary):
     store, owner, original_revision = recovery
-    original = store._atomic
-    def revoke(path, raw):
-        original(path, raw)
-        if (boundary == 'restore' and path == store.config_path or
-                boundary == 'commit' and path.suffix == '.journal' and
+    write, atomic = store._write_in_place, store._atomic
+    def revoke_on_restore(raw):
+        write(raw)
+        if boundary == 'restore':
+            owner.policy_locked = True
+    def revoke_on_commit(path, raw):
+        atomic(path, raw)
+        if (boundary == 'commit' and path.suffix == '.journal' and
                 json.loads(raw)['phase'] == 'recovered'):
             owner.policy_locked = True
-    monkeypatch.setattr(store, '_atomic', revoke)
+    monkeypatch.setattr(store, '_write_in_place', revoke_on_restore)
+    monkeypatch.setattr(store, '_atomic', revoke_on_commit)
     result = recover(recovery)
     assert result['code'] == 'POLICY_LOCKED'
     assert store.compute_digest() == original_revision
     assert not owner.running
     assert json.loads(store._read_bytes(store.config_path.with_suffix('.journal')))['phase'] != 'recovered'
-

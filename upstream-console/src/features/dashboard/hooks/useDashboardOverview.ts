@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { authFilesApi } from '@/services/api';
 import { useAuthStore, useConfigStore, useModelsStore } from '@/stores';
 import { useApiKeysForModels } from '@/hooks/useApiKeysForModels';
+import { isHosted } from '@/hosted/runtime';
 import { useProviderRecentRequests } from '@/components/providers/hooks/useProviderRecentRequests';
 import {
   mergeRecentRequestBucketGroups,
@@ -140,7 +141,8 @@ export function useDashboardOverview() {
   }, [connected]);
 
   const loadModels = useCallback(async () => {
-    if (!connected || !apiBase) return;
+    // A hosted console has no connection URL; the host brokers model discovery.
+    if (!connected || (!apiBase && !isHosted())) return;
     try {
       const apiKeys = await resolveApiKeysForModels();
       await fetchModelsFromStore(apiBase, apiKeys[0]);

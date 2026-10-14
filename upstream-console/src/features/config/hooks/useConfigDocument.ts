@@ -187,7 +187,9 @@ export function useConfigDocument({
     let writeAttempted = false;
     setSaving(true);
     try {
-      const latestServerYaml = await configFileApi.fetchConfigYaml();
+      // The revision must come from this same read: it is what the host compares at write time.
+      const latest = await configFileApi.fetchConfigSnapshot();
+      const latestServerYaml = latest.content;
       if (!operation.isCurrent()) return;
       if (latestServerYaml !== previewServerYaml) {
         const nextMergedYaml = !sourceDirty
@@ -222,9 +224,9 @@ export function useConfigDocument({
       if (previewMode === 'visual' && !previewPlan) return;
       writeAttempted = true;
       if (previewMode === 'visual' && previewPlan) {
-        await applyConfigPatch(previewPlan, operation.revision);
+        await applyConfigPatch(previewPlan, operation.revision, latest.revision);
       } else {
-        await configFileApi.saveConfigYaml(mergedYaml);
+        await configFileApi.saveConfigYaml(mergedYaml, latest.revision);
       }
       if (!operation.isCurrent()) return;
       useConfigStore.getState().clearCache();

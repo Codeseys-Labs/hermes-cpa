@@ -1,15 +1,19 @@
 import base from './vite.config';
 import { defineConfig, mergeConfig } from 'vite';
 import path from 'node:path';
-// Test-only reference uses ORIGINAL pinned MainLayout source, not its Hermes
-// derivative. Only effect dependencies are replaced; markup/styles unchanged.
-export default mergeConfig(base, defineConfig({
-  plugins: [{name:'passive-reference-only',enforce:'pre',transform(code, id) {
-    if (id.endsWith('/src/HermesApp.tsx')) return code.replace("@/hermes/HermesMainLayout", "@/components/layout/MainLayout");
-    if (id.endsWith('/components/layout/MainLayout.tsx')) return code
-      .replace("@/stores", path.resolve('../../reference/stores.ts'))
-      .replace("@/router/MainRoutes", '@/hermes/ConsoleRoutes')
-      .replace("@/services/api", path.resolve('../../reference/denied-api.ts'));
-  }}],
-  build: {outDir:'../../reference/dist'},
-}));
+
+// Test-only reference build: the pinned upstream entry (main.tsx -> App.tsx, with its own
+// login and management key) served as a normal browser document. The shipped artifact is
+// index.html -> HermesApp.tsx, which runs the same pages and routes behind the hosted
+// adapters; this build exists to compare its behavior against the unmodified shell.
+export default mergeConfig(
+  base,
+  defineConfig({
+    build: {
+      outDir: 'dist-reference',
+      rolldownOptions: {
+        input: path.resolve(__dirname, 'index.reference.html'),
+      },
+    },
+  })
+);

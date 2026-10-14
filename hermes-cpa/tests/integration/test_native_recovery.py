@@ -6,14 +6,17 @@ from test_lifecycle_safety import owner
 def test_native_recovery_dispatch_restores_and_stays_stopped(owner):
     store = ConfigStore(owner.settings.config_path)
     original = store.compute_digest()
+    inode = store.config_path.stat().st_ino
     store.snapshot()
-    assert store.apply_safe_changes(original, {'request_retry': 4})[0]
+    # An interrupted native write left different bytes behind an unfinished journal.
+    store._write_in_place(b'server: {host: 127.0.0.1, port: 8319}\n')
     store._journal('applying', original)
     args = dict(expected_revision=store.compute_digest(), snapshot_revision=original,
                 expected_generation=owner.generation, native_consent=True)
     result = owner.dispatch({'cmd': 'recover', 'args': args})
     assert result['ok'], result
     assert store.compute_digest() == original
+    assert store.config_path.stat().st_ino == inode
     assert owner.child_process is None
 
 

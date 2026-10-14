@@ -8,7 +8,7 @@ Explicit managed `hermes cpa setup --consent` starts CPA and the broker, enrolls
 the provider and remembers autostart by default. Neither path migrates upstream
 credentials or installs a system service.
 
-Earlier exploratory commands (run1327, retained for context):
+Standalone external forwarding, separate from managed setup:
 
     python -m hermes_cpa.cli subscription-serve --upstream http://127.0.0.1:<fixture-port> --port 0 --consent
     python -m hermes_cpa.subscription_client --control <default-home>/cpa/run/subscription/supervisor.sock
@@ -95,32 +95,41 @@ relaunch the owner to capture a newly issued permit. No automatic renewal occurs
 Accepted releases have no candidate lease. Standalone external forwarding is not
 a managed candidate owner and does not acquire one.
 
-The broker reads only HERMES_CPA_INFERENCE_KEY from the explicit owner's local
-.env via the existing tokenizer. It deliberately does NOT use ambient,
-management, another worker, external vault or managed-overlay fallback. Source
-failure/removal denies admission. File write identity plus key digest advances
-an in-memory epoch, including A-B-A writes between reads; invalid reads revoke
-existing grants. Explicit revoke() and process restart invalidate all existing
-grants. Grants expire after 30 seconds; signatures are process-private and never
-persist. Every admission rechecks the grant, epoch and live consumer directory.
+The managed broker uses the exact-owned CPA child's private inference channel.
+It has no private CPA inference key to copy, rotate or expose. Changes to public
+CPA keys, host, port, TLS or management settings do not retarget this channel or
+change the enrolled broker endpoint.
+
+The standalone external broker instead reads only `HERMES_CPA_INFERENCE_KEY`
+from the explicit owner's local `.env` via the existing tokenizer. It does not
+use ambient, management, another worker, external vault or managed-overlay
+fallback. Source failure/removal denies admission. File identity plus key digest
+advances its epoch, including A-B-A writes; invalid reads revoke existing grants.
+
+Explicit revoke and process restart invalidate existing grants. Grants expire
+after 30 seconds; signatures are process-private and never persist. Every
+admission rechecks the grant, epoch and live consumer directory.
 Private Unix control socket mode0600 and same-UID peer authentication are the
 local authority boundary. A same-user process can choose any live worker because
 the authorized mapping is all local workers, not mutually hostile OS principals.
 Do not expose this socket or assume per-worker isolation against same-UID code.
 
-The HTTP plane allows only GET /v1/models, POST /v1/chat/completions and
-POST /v1/responses, rejects browser-origin requests, and substitutes the inference
-key server-side. It does not forward client headers, follow redirects, use proxy
-environment variables, return upstream error bodies or retry requests. Admission
-is the linearization point: rotation prevents future admissions, but cannot
-unsend an upstream request already dispatched. Consumer request bytes are passed
-through. Generated chunked HTTP tests now exercise safe SSE byte preservation and
-credential-echo refusal across upstream chunk boundaries. The broker holds at most
-one credential-length suffix, aborts on a literal inference-key echo, and emits
-no terminating HTTP chunk on failed/oversize/expired streams, so clients see an
-incomplete response rather than silent successful EOF. Only fixed JSON/SSE media
-types are returned; arbitrary upstream Content-Type parameters are not forwarded.
-This is not a general filter for encoded secrets or unknown provider credentials.
+The HTTP plane allows only GET `/v1/models`, POST `/v1/chat/completions` and
+POST `/v1/responses`, and rejects browser-origin requests. Managed requests use
+the private inference channel; standalone external forwarding substitutes its
+owner's inference key server-side. Neither mode forwards client authorization
+headers, follows redirects, uses ambient proxies, returns upstream error bodies
+or retries requests. Admission is the linearization point: revocation prevents
+future admissions but cannot unsend a request already dispatched. Consumer
+request bytes are passed through.
+
+Generated chunked HTTP checks exercise safe SSE byte preservation and, in
+external-key mode, literal credential-echo refusal across chunk boundaries. That
+mode holds at most one credential-length suffix and aborts on a literal key echo.
+Failed, oversized or expired streams receive no terminating HTTP chunk, so the
+client sees an incomplete response rather than successful EOF. Only fixed
+JSON/SSE media types are returned. This is not a general filter for encoded
+secrets or unknown upstream provider credentials.
 
 Limits: 32 connection threads, 1MiB input, 8MiB response, 10s socket/inactivity
 bounds, and a 300s total response-I/O deadline starting before connection setup,

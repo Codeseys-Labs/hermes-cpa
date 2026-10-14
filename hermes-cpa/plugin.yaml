@@ -22,10 +22,6 @@ config_schema:
     enum: [external, managed]
     default: external
     description: "CPA management mode (external read-only or managed instance)"
-  managed_port:
-    type: integer
-    default: 8318
-    description: "Local loopback port for managed CPA instance"
   broker_port:
     type: integer
     description: "Loopback port of the default-profile inference broker; set by managed setup"
@@ -43,8 +39,8 @@ config_schema:
   management_key:
     type: secret
     env: HERMES_CPA_MANAGEMENT_KEY
-    description: "Management secret key for CPA instance"
+    description: "Management key for external CPA passive reads; unused by managed private channels"
   inference_key:
     type: secret
     env: HERMES_CPA_INFERENCE_KEY
-    description: "Separate inference access key for CPA instance"
+    description: "Access key for the explicit external inference broker; unused by managed CPA"

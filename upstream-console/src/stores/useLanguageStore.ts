@@ -4,11 +4,12 @@
  */
 
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { createJSONStorage, persist } from 'zustand/middleware';
 import type { Language } from '@/types';
 import { STORAGE_KEY_LANGUAGE } from '@/utils/constants';
 import i18n from '@/i18n';
 import { getInitialLanguage, isSupportedLanguage } from '@/utils/language';
+import { getUiStorage } from '@/hosted/storage';
 
 interface LanguageState {
   language: Language;
@@ -31,6 +32,7 @@ export const useLanguageStore = create<LanguageState>()(
     }),
     {
       name: STORAGE_KEY_LANGUAGE,
+      storage: createJSONStorage(() => getUiStorage('local')),
       merge: (persistedState, currentState) => {
         const nextLanguage = (persistedState as Partial<LanguageState>)?.language;
         if (typeof nextLanguage === 'string' && isSupportedLanguage(nextLanguage)) {

@@ -46,6 +46,8 @@ import {
   resolvePluginAssetURL,
   type PluginResourceEntry,
 } from '@/features/plugins/pluginResources';
+import { usePluginAssetSrc } from '@/features/plugins/pluginAssets';
+import { isHosted } from '@/hosted/runtime';
 import { APIKEY_FUN_DISPLAY_NAME, hasApiKeyFunConfig } from '@/features/providers/sponsor';
 import { triggerHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { LANGUAGE_LABEL_KEYS, LANGUAGE_ORDER } from '@/utils/constants';
@@ -137,10 +139,11 @@ function useMenuDismiss(
 
 function PluginSidebarIcon({ src }: { src: string }) {
   const [failed, setFailed] = useState(false);
-  const showImage = Boolean(src) && !failed;
+  const displaySrc = usePluginAssetSrc(src);
+  const showImage = Boolean(displaySrc) && !failed;
 
   return showImage ? (
-    <img src={src} alt="" onError={() => setFailed(true)} />
+    <img src={displaySrc} alt="" onError={() => setFailed(true)} />
   ) : (
     <IconSidebarPlugins size={18} />
   );
@@ -1131,7 +1134,13 @@ export function MainLayout() {
               </div>
             )}
           </div>
-          <Button variant="ghost" size="sm" onClick={logout} title={t('header.logout')}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={logout}
+            title={isHosted() ? t('header.lock_console') : t('header.logout')}
+            aria-label={isHosted() ? t('header.lock_console') : t('header.logout')}
+          >
             {headerIcons.logout}
           </Button>
         </div>

@@ -5,9 +5,9 @@
 # to launch a CPA owner: backend, CLI, owner and broker must share this PID ns.
 # All operations use exec -T keepdev python /opt/q/scripts/qualification.py ...
 # Fresh boot prepares only external mode. Explicit permit and cpa setup follow.
-# Rebuild/update: up -d with the new immutable image ID, quiesce --consent,
-# refresh --consent, explicit permit, restart; no generated-state hand editing.
-# Quiesce after recreation because remembered autostart may have resumed CPA.
+# Rebuild/update: quiesce through the old running image before replacing it.
+# Then refresh --consent, issue an explicit new permit, and restart managed CPA.
+# A private-channel migration uses a fresh root; preserve the previous root.
 name: hermes-cpa-dev
 services:
   keepdev:
@@ -21,14 +21,14 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs:
-      - /tmp:rw,nosuid,nodev,mode=1777,size=256m
+      - /tmp:rw,exec,nosuid,nodev,mode=1777,size=256m
     volumes:
       - data:/work
     restart: unless-stopped
     stop_grace_period: 30s
-    command: [python, /opt/q/scripts/qualification.py, serve, --root, /work/q, --prepare-if-missing]
+    command: [python, /opt/q/scripts/qualification.py, serve, --root, "${CPA_QUALIFICATION_ROOT:-/work/q}", --prepare-if-missing]
     healthcheck:
-      test: [CMD, python, /opt/q/scripts/qualification.py, smoke, --root, /work/q]
+      test: [CMD, python, /opt/q/scripts/qualification.py, smoke, --root, "${CPA_QUALIFICATION_ROOT:-/work/q}"]
       interval: 30s
       timeout: 45s
       start_period: 90s

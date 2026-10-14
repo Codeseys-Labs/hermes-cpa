@@ -1,35 +1,25 @@
-import pytest
 from hermes_cpa.config_store import ConfigStore
 
-def test_config_store_initial_and_rollback(tmp_path):
+
+def test_initial_config_snapshot_and_in_place_rollback(tmp_path):
     cfg_file = tmp_path / "config.yaml"
     store = ConfigStore(cfg_file)
-    store.create_initial_config(8318, "super-secret-mgmt", "client-inf-key")
+    store.create_initial_config(8318, access_keys=["generated-client-key"],
+                                management_key="generated-public-mgmt")
 
-    assert cfg_file.exists()
     raw = cfg_file.read_text()
-    assert "super-secret-mgmt" not in raw
+    assert "generated-public-mgmt" not in raw
     assert "$2b$" in raw or "$2a$" in raw
-    assert "client-inf-key" in raw
+    assert "generated-client-key" in raw
 
     snap = store.snapshot()
-    assert snap.exists()
     rev1 = store.compute_digest()
+    inode = cfg_file.stat().st_ino
+    store._write_in_place(b"config-version: 8\nrouting: {strategy: fill-first}\n")
+    assert store.compute_digest() != rev1
+    assert cfg_file.stat().st_ino == inode
 
-    # Apply safe changes
-    ok, rev2, code = store.apply_safe_changes(rev1, {"strategy": "fill-first", "request_retry": 5})
-    assert ok is True
-    assert rev2 != rev1
-    data = store.read_config()
-    assert data["routing"]["strategy"] == "fill-first"
-    assert data["routing"]["retry"]["request-retry"] == 5
-
-    # Test stale revision rejection
-    ok_stale, _, code_stale = store.apply_safe_changes("old-rev", {"strategy": "round-robin"})
-    assert ok_stale is False
-    assert code_stale == "STALE_REVISION"
-
-    # Test rollback
     store.rollback(snap)
     assert store.compute_digest() == rev1
+    assert cfg_file.stat().st_ino == inode
     assert store.read_config()["routing"]["strategy"] == "round-robin"

@@ -1,7 +1,18 @@
-"""Single Linux owner. All mutation paths share mutation_gate; no auto-restart."""
+"""Single Linux owner. All mutation paths share mutation_gate; no auto-restart.
+
+The owned CPA child serves private owner-only Unix channels (control and
+inference) beside its user-configured public listener. Readiness, config
+transactions, the inference broker and the console service reach the child
+only through those channels, verified against the exact launched process.
+Public listener, TLS, management and access keys are user configuration and
+confer no owner authority.
+"""
 import argparse
+import base64
+import hashlib
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -11,11 +22,28 @@ import time
 import secrets
 from collections import OrderedDict, deque
 from pathlib import Path
+from urllib.parse import parse_qsl
 
 from .settings import CpaSettings
-from .contracts import LifecycleState
+from .contracts import LifecycleState, validate_changes
+from .owner_transport import (CONSOLE_FRAME_SECONDS, CONSOLE_IPC_LIMIT, ORDINARY_REQUEST_LIMIT,
+    PREPARE_RESPONSE_LIMIT, REVISION, ControlChannel, InferenceChannel, TransportError,
+    decode_prepare, encode_prepare, frame_length, read_exact, read_line)
 from .process_owner import (require_platform, process_identity, private_directory,
-    private_open, atomic_json, socket_address, peer_pid, signal_owned, owns_loopback_listener)
+    private_open, atomic_json, socket_address, peer_pid, signal_owned)
+
+# The reduced legacy config.apply wire, expressed as native v8 config requests.
+LEGACY_CONFIG_ROUTES = {'strategy': '/v8/management/config/routing/strategy',
+                        'request_retry': '/v8/management/config/routing/retry/request-retry',
+                        'request_log': '/v8/management/config/observability/logs/request-log'}
+NATIVE_REFUSALS = frozenset({'INVALID_REQUEST', 'INVALID_CONFIG', 'NOT_FOUND', 'READ_ONLY_FIELD'})
+CONSOLE_JOBS = 4
+# Receipts of accepted console work and scoped grant cleanup: no native call,
+# original scope only, so they stay reachable after revocation or shutdown latch.
+CONSOLE_RECEIPT_OPS = frozenset({'result', 'authority_terminal', 'resource_close'})
+IPC_HANDLERS = 8
+PASSIVE_READ_LIMIT = 1024 * 1024
+_RESULT_CODE = re.compile(r'[A-Z][A-Z0-9_]{0,63}\Z')
 
 
 def _stamp(st):
@@ -143,25 +171,31 @@ class CpaSupervisor:
     stop, unload under revoked policy, or policy revocation. lifetime='plugin'
     (remembered autostart) additionally exits once no native registration has
     held a lifetime lease for lease_grace seconds. Neither mode restarts CPA.
+
+    ``console`` is the console service factory ``(owner, control) -> service``;
+    ``broker`` is the inference broker factory ``(owner) -> context manager``.
     """
-    def __init__(self, settings, *, mode=None, port=None, probe=None, policy=None,
-                 transaction=None, readiness_timeout=30., stop_grace=10.,
+    def __init__(self, settings, *, mode=None, probe=None, policy=None,
+                 readiness_timeout=30., stop_grace=10.,
                  watchdog_interval=5., policy_failure_timeout=30., command=None,
-                 compatibility_check=None, lifetime='persistent', lease_grace=10.,
-                 broker=None, authorization=None):
+                 prepare_command=None, compatibility_check=None, lifetime='persistent',
+                 lease_grace=10., broker=None, console=None, authorization=None):
         self.settings = settings
         self.mode = mode or getattr(settings, 'mode', 'external')
-        self.port = port or getattr(settings, 'managed_port', 8318)
-        self.probe = probe
         self.policy = policy or (lambda: False)
-        self.transaction = transaction
-        self.command = command  # Dependency injection for harmless subprocess tests only.
+        # Dependency injection for harmless generated children only.
+        self.command = command
+        self.prepare_command = prepare_command
         self.compatibility_check = compatibility_check
         self.authorization = authorization
         self.readiness_timeout, self.stop_grace = readiness_timeout, stop_grace
         self.watchdog_interval, self.policy_failure_timeout = watchdog_interval, policy_failure_timeout
         self.child_process = None
         self.child_identity = None
+        # Private owner channels accept only the live child launched here.
+        self.control = ControlChannel(settings.private_dir, self.private_peer)
+        self.inference = InferenceChannel(settings.private_dir, self.private_peer)
+        self.probe = probe or self.control.probe
         self.lock_file = None
         self.server_sock = None
         self.socket_inode = None
@@ -184,6 +218,7 @@ class CpaSupervisor:
         self._cleanup_gate = threading.Lock()
         self._exit_deadline = None
         self._operation_policy = threading.local()
+        self._ipc_slots = threading.BoundedSemaphore(IPC_HANDLERS)
         if lifetime not in ('persistent', 'plugin'):
             raise ValueError('invalid_lifetime')
         self.lifetime, self.lease_grace = lifetime, lease_grace
@@ -193,12 +228,18 @@ class CpaSupervisor:
         self.broker = broker
         self._broker = None
         self.broker_state = 'disabled' if broker is None else 'stopped'
+        # One console service per owner; it never gets a second acceptance ledger.
+        self.console = console(self, self.control) if console is not None else None
 
     def _authorization_current(self):
         return self.authorization is None or self.authorization.current()
 
     def _authorized_timeout(self, timeout):
         return timeout if self.authorization is None else min(timeout, self.authorization.remaining())
+
+    def authorized_timeout(self, timeout):
+        """Bound owner work by the captured candidate authorization deadline."""
+        return self._authorized_timeout(timeout)
 
     def _capture_policy(self):
         """Pin an accepted operation to the exact policy incarnation, if supported.
@@ -230,6 +271,15 @@ class CpaSupervisor:
         intent = {key: value for key, value in request.items() if key != '_host_grant'}
         return revalidate_grant(request['_host_grant'], intent)
 
+    def operation_current(self):
+        """Owner authority for console work right now; call at linearization points.
+
+        Always checks the shutdown latch, authorization deadline and service
+        policy. Inside an accepted job (bound by the ledger worker) it also
+        checks the policy incarnation captured at acceptance and any grant.
+        """
+        return not self._shutdown and self._policy_ok()
+
     def _transition(self, state, reason=''):
         self.state, self.sanitized_reason = state, reason
         self.last_transition = time.time()
@@ -237,6 +287,16 @@ class CpaSupervisor:
         self._events.append({'seq': self._seq, 'time': self.last_transition,
                              'generation': self.generation, 'type': 'lifecycle',
                              'summary_code': reason or state.value})
+
+    def _console_hook(self, name, *args):
+        """Best-effort service notification; a failing hook never blocks the owner."""
+        hook = getattr(self.console, name, None) if self.console is not None else None
+        if hook is None:
+            return
+        try:
+            hook(*args)
+        except Exception:
+            pass
 
     def acquire_lock(self):
         require_platform()
@@ -260,6 +320,30 @@ class CpaSupervisor:
         if self.child_process and self.child_process.poll() is None:
             if self.child_identity != process_identity(self.child_process.pid):
                 raise RuntimeError('ownership_lost')
+
+    def private_peer(self):
+        """Identity of the live child launched here: the only acceptable private peer."""
+        child, identity = self.child_process, self.child_identity
+        if child is None or identity is None or child.poll() is not None:
+            return None
+        return identity if process_identity(child.pid) == identity else None
+
+    def _reset_private_channels(self):
+        """Caller holds the instance lock: stale socket paths are ours to remove.
+
+        The child refuses to start over an existing path and never unlinks one
+        it did not create; a foreign listener left there is never adopted.
+        """
+        private_directory(self.settings.private_dir)
+        for path in (self.settings.control_socket_path, self.settings.inference_socket_path):
+            if path.is_symlink() or (path.exists() and not path.is_socket()):
+                raise RuntimeError('unsafe_socket')
+            path.unlink(missing_ok=True)
+
+    def _private_arguments(self):
+        return ['--hermes-control-socket', str(self.settings.control_socket_path),
+                '--hermes-inference-socket', str(self.settings.inference_socket_path),
+                '--hermes-owner-pid', str(os.getpid())]
 
     def _policy_ok(self, captured=None):
         if not self._authorization_current():
@@ -295,6 +379,39 @@ class CpaSupervisor:
             self.running = False
         return False
 
+    def _launch_child(self, command):
+        """Keep the creating thread alive for the child's parent-death guard.
+
+        Linux PR_SET_PDEATHSIG follows the thread that calls Popen, not the
+        supervisor process as a whole. Console jobs and IPC handlers are
+        transient, so they must not directly create a long-lived CPA child.
+        """
+        launched = threading.Event()
+        outcome = {}
+
+        def launch():
+            try:
+                child = subprocess.Popen(
+                    [sys.executable, str(Path(__file__).with_name('process_owner.py')),
+                     str(os.getpid()), *command], cwd=self.settings.instances_dir,
+                    env={'HOME': str(self.settings.instances_dir), 'PATH': '/usr/bin:/bin'},
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                outcome['child'] = child
+            except Exception as exc:
+                outcome['error'] = exc
+            finally:
+                launched.set()
+            if 'child' in outcome:
+                # No mutation gate or operation authority is held here. Popen's
+                # wait lock also permits the owner to stop/reap this same child.
+                outcome['child'].wait()
+
+        threading.Thread(target=launch, daemon=True, name='hermes-cpa-child-parent').start()
+        launched.wait()
+        if 'error' in outcome:
+            raise outcome['error']
+        return outcome['child']
+
     def start_child(self, *, _transaction=False):
         with self.mutation_gate:
             try:
@@ -318,45 +435,20 @@ class CpaSupervisor:
                 except Exception:
                     self._transition(LifecycleState.FAILED, 'recovery_required')
                     return False
-            if self.probe is None:
-                self._transition(LifecycleState.FAILED, 'secret_unavailable')
-                return False
-            if type(self.port) is not int or not 1 <= self.port <= 65535:
-                self._transition(LifecycleState.FAILED, 'invalid_port')
-                return False
-            with socket.socket() as reservation:
-                # Match the managed HTTP listener's restart semantics: TIME_WAIT
-                # from our reaped child is not a live conflicting listener.
-                # SO_REUSEPORT is deliberately not enabled; a live listener
-                # still makes bind fail and never grants adoption authority.
-                reservation.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                try:
-                    reservation.bind(('127.0.0.1', self.port))
-                except OSError:
-                    self._transition(LifecycleState.FAILED, 'port_in_use')
-                    return False
             try:
-                if self.command is None:
-                    if self.compatibility_check is None or not self.compatibility_check():
-                        raise RuntimeError('incompatible')
-                    from .config_store import ConfigStore
-                    cfg = ConfigStore(self.settings.config_path).read_config()
-                    server, mgmt = cfg.get('server', {}), cfg.get('management', {})
-                    if (server.get('host') != '127.0.0.1' or server.get('port') != self.port or
-                        server.get('discovery', {}).get('enabled') is not False or
-                        mgmt.get('allow-remote') is not False or
-                        mgmt.get('disable-control-panel') is not True):
-                        raise RuntimeError('unsafe_config')
-                command = self.command or [str(self.settings.binary_path), '-config',
-                                            str(self.settings.config_path), '-local-model']
+                if self.command is None and (self.compatibility_check is None or
+                                             not self.compatibility_check()):
+                    raise RuntimeError('incompatible')
+                command = (self.command or [str(self.settings.binary_path), '-config',
+                                            str(self.settings.config_path), '-local-model'])
+                command = [*command, *self._private_arguments()]
+                self._reset_private_channels()
                 if self._shutdown or not self._policy_ok():
                     raise RuntimeError('policy_locked')
                 self._transition(LifecycleState.STARTING)
-                self.child_process = subprocess.Popen(
-                    [sys.executable, str(Path(__file__).with_name('process_owner.py')),
-                     str(os.getpid()), *command], cwd=self.settings.instances_dir,
-                    env={'HOME': str(self.settings.instances_dir), 'PATH': '/usr/bin:/bin'},
-                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                # The user-configured public listener is CPA's own business; no
+                # TCP port grants readiness or adoption authority here.
+                self.child_process = self._launch_child(command)
                 self.child_identity = process_identity(self.child_process.pid)
             except Exception:
                 self._transition(LifecycleState.FAILED, 'launch_failed')
@@ -377,13 +469,12 @@ class CpaSupervisor:
                             self._policy_ok() and
                             getattr(result, 'management_ready', False) is True and
                             getattr(result, 'compatible', False) is True and
-                            self.child_process.poll() is None and
-                            (self.command is not None or owns_loopback_listener(self.child_process.pid, self.port))):
+                            self.child_process.poll() is None):
                         self.inference_configured = result.inference_configured
                         self._transition(LifecycleState.READY)
                         return True
                 except Exception:
-                    pass  # Never put upstream errors/keys in diagnostics.
+                    pass  # Never put upstream errors in diagnostics.
                 time.sleep(min(.05, max(0., deadline - time.monotonic())))
             if not self._authorization_current():
                 reason = 'authorization_expired'
@@ -399,7 +490,13 @@ class CpaSupervisor:
             if child is None or child.poll() is not None:
                 self._transition(LifecycleState.STOPPED)
                 return True
-            if self.lock_file is None or not signal_owned(child, self.child_identity, signal.SIGTERM):
+            if self.lock_file is None or self.child_identity != process_identity(child.pid):
+                self._transition(LifecycleState.OWNERSHIP_LOST, 'ownership_lost')
+                return False
+            # In-memory OAuth sessions die with the child: cancel the recorded
+            # pending ones natively while the child can still answer.
+            self._console_hook('cancel_pending_oauth', 'child_stopping')
+            if not signal_owned(child, self.child_identity, signal.SIGTERM):
                 self._transition(LifecycleState.OWNERSHIP_LOST, 'ownership_lost')
                 return False
             self._transition(LifecycleState.STOPPING)
@@ -443,8 +540,7 @@ class CpaSupervisor:
                 result = probe(timeout=timeout)
                 healthy = (time.monotonic() < deadline and not self._shutdown and
                            self._policy_ok() and result.management_ready is True and
-                           result.compatible is True and child.poll() is None and
-                           (self.command is not None or owns_loopback_listener(child.pid, self.port)))
+                           result.compatible is True and child.poll() is None)
             except Exception:
                 pass
             if child.poll() is not None:
@@ -471,6 +567,79 @@ class CpaSupervisor:
                 'management_ready': authorized and self.state == LifecycleState.READY,
                 'inference_configured': self.inference_configured if authorized else None,
                 'lifetime': self.lifetime, 'broker': self.broker_state}
+
+    def prepare_config(self, expected_revision, requests, timeout=10.):
+        """Native canonical candidate for ordered config requests; never writes.
+
+        A live owned child prepares over the private control channel. A stopped
+        instance uses the verified binary's offline mode, so first
+        configuration and repairing a config that fails to start take the
+        same native path. A live but unverifiable child prepares nothing.
+        """
+        try:
+            payload = encode_prepare(expected_revision, requests)
+        except TransportError as exc:
+            return {'ok': False, 'code': exc.code}
+        timeout = self._authorized_timeout(timeout)
+        if timeout <= 0 or self.mode != 'managed':
+            return {'ok': False, 'code': 'UNAVAILABLE'}
+        if self.private_peer() is not None:
+            try:
+                status, body = self.control.prepare(payload, timeout=timeout)
+            except TransportError:
+                return {'ok': False, 'code': 'UNAVAILABLE'}
+            return decode_prepare(status, body)
+        child = self.child_process
+        if child is not None and child.poll() is None:
+            return {'ok': False, 'code': 'UNAVAILABLE'}
+        return self._prepare_offline(payload, timeout)
+
+    def _prepare_offline(self, payload, timeout):
+        command = self.prepare_command
+        if command is None:
+            try:
+                if self.compatibility_check is None or not self.compatibility_check():
+                    return {'ok': False, 'code': 'UNAVAILABLE'}
+            except Exception:
+                return {'ok': False, 'code': 'UNAVAILABLE'}
+            command = [str(self.settings.binary_path), '-config', str(self.settings.config_path),
+                       '--hermes-prepare-config']
+        try:
+            completed = subprocess.run(
+                command, input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                timeout=timeout, cwd=self.settings.instances_dir, close_fds=True,
+                env={'HOME': str(self.settings.instances_dir), 'PATH': '/usr/bin:/bin'})
+        except (OSError, subprocess.SubprocessError):
+            return {'ok': False, 'code': 'UNAVAILABLE'}
+        status = {0: 200, 1: 500, 2: 400, 3: 409}.get(completed.returncode)
+        if status is None or len(completed.stdout) > PREPARE_RESPONSE_LIMIT:
+            return {'ok': False, 'code': 'UNAVAILABLE'}
+        return decode_prepare(status, completed.stdout)
+
+    def _commit_live(self, expected_revision, candidate_revision, candidate):
+        """Native compare-and-commit inside the running child.
+
+        Returns OK, STALE_REVISION, RESTART_REQUIRED, REFUSED (nothing written),
+        UNAVAILABLE (nothing sent) or OUTCOME_UNKNOWN (never resubmitted).
+        """
+        try:
+            status, body = self.control.commit(expected_revision, candidate_revision, candidate,
+                                               timeout=self._authorized_timeout(10.))
+        except TransportError as exc:
+            return 'UNAVAILABLE' if exc.code == 'UNAVAILABLE' else 'OUTCOME_UNKNOWN'
+        try:
+            data = json.loads(body)
+        except (ValueError, TypeError):
+            data = None
+        data = data if isinstance(data, dict) else {}
+        if status == 200:
+            return 'OK' if data.get('revision') == candidate_revision else 'OUTCOME_UNKNOWN'
+        if status == 409 and data.get('code') in ('STALE_REVISION', 'RESTART_REQUIRED'):
+            return data['code']
+        if status in (400, 422):
+            return 'REFUSED'
+        # A native write failure may already have truncated the document.
+        return 'OUTCOME_UNKNOWN'
 
     def transaction_owner(self):
         supervisor = self
@@ -505,6 +674,18 @@ class CpaSupervisor:
 
             def start_owned_and_poll_readiness(self):
                 return supervisor.start_child(_transaction=True)
+
+            def prepare_config(self, expected_revision, requests):
+                return supervisor.prepare_config(expected_revision, requests)
+
+            def commit_live(self, expected_revision, candidate_revision, candidate):
+                return supervisor._commit_live(expected_revision, candidate_revision, candidate)
+
+            def cancel_pending_oauth(self, reason):
+                supervisor._console_hook('cancel_pending_oauth', reason)
+
+            def config_committed(self, base_revision, revision, effects):
+                supervisor._console_hook('config_committed', base_revision, revision, effects)
         return OwnerView()
 
     def upgrade_owned(self, installer, archive_path, *, expected_generation,
@@ -528,6 +709,11 @@ class CpaSupervisor:
             return result
 
     def apply_transaction(self, request):
+        """Reduced legacy ``config.apply``: three settings as native config requests.
+
+        Validation and canonical bytes come from the native preparer; this only
+        names the v8 config routes for the legacy wire's fixed fields.
+        """
         with self.mutation_gate:
             self.assert_ownership()
             if not self._policy_ok():
@@ -538,32 +724,87 @@ class CpaSupervisor:
                 return {'ok': False, 'code': 'STALE_REVISION'}
             if self.child_process and self.child_process.poll() is None and request.get('restart_consent') is not True:
                 return {'ok': False, 'code': 'CONSENT_REQUIRED'}
-            if self.transaction is None:
+            try:
+                changes = validate_changes(request.get('changes'))
+            except ValueError:
+                return {'ok': False, 'code': 'INVALID_INPUT'}
+            requests = [{'method': 'PUT', 'path': LEGACY_CONFIG_ROUTES[key],
+                         'content_type': 'application/json',
+                         'body_base64': base64.b64encode(json.dumps(value).encode()).decode()}
+                        for key, value in sorted(changes.items())]
+            from .config_store import ConfigStore
+            result = ConfigStore(self.settings.config_path).transact(
+                request['expected_revision'], requests,
+                expected_generation=request['expected_generation'],
+                owner=self.transaction_owner(), restart_consent=request.get('restart_consent') is True)
+            code = 'INVALID_INPUT' if result['code'] in NATIVE_REFUSALS else result['code']
+            return {'ok': result['ok'], 'code': code, 'revision': result['revision'],
+                    'generation': result['generation'], 'rollback': result['rollback']}
+
+    def config_transaction(self, expected_revision, requests, *, reviewed_candidate_revision,
+                           restart_consent=False):
+        """Full native config transaction for ONE reviewed console save.
+
+        Only inside an accepted ``console.execute`` job: authority is the
+        policy incarnation and grant captured at acceptance.
+        """
+        request = getattr(self._operation_policy, 'request', None)
+        if not isinstance(request, dict) or request.get('action') != 'console.execute':
+            return {'ok': False, 'code': 'POLICY_LOCKED'}
+        if not isinstance(reviewed_candidate_revision, str) or not REVISION.match(reviewed_candidate_revision):
+            return {'ok': False, 'code': 'REVIEW_STALE'}
+        with self.mutation_gate:
+            try:
+                self.assert_ownership()
+            except RuntimeError:
                 return {'ok': False, 'code': 'UNAVAILABLE'}
-            return self.transaction(self, request)
+            if self._shutdown or not self._policy_ok():
+                return {'ok': False, 'code': 'POLICY_LOCKED'}
+            from .config_store import ConfigStore
+            return ConfigStore(self.settings.config_path).transact(
+                expected_revision, requests, expected_generation=request.get('expected_generation'),
+                owner=self.transaction_owner(), restart_consent=restart_consent is True,
+                reviewed_candidate_revision=reviewed_candidate_revision)
 
     def submit(self, args):
         action = args.get('action')
         request_id = args.get('request_id')
-        if action not in ('start', 'stop', 'restart', 'config.apply') or not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
+        actions = ('start', 'stop', 'restart', 'config.apply') + (
+            ('console.execute',) if self.console is not None else ())
+        if action not in actions or not isinstance(request_id, str) or not 1 <= len(request_id) <= 128:
             return {'ok': False, 'code': 'INVALID_INPUT'}
         if self._shutdown or not self._policy_ok():
             return {'ok': False, 'code': 'POLICY_LOCKED'}
+        if '_host_grant' in args:
+            from .operation_guard import revalidate_grant
+            intent = {key: value for key, value in args.items() if key != '_host_grant'}
+            if not revalidate_grant(args['_host_grant'], intent, timeout=self._authorized_timeout(1.)):
+                return {'ok': False, 'code': 'POLICY_LOCKED'}
         # Accepted-operation authority: any later config/manifest rewrite
         # revokes this request even if the long-lived service stays authorized.
         captured = self._capture_policy()
         if captured is None:
             return {'ok': False, 'code': 'POLICY_LOCKED'}
-        body = json.dumps(args, sort_keys=True)
+        try:
+            body = json.dumps(args, sort_keys=True, separators=(',', ':'), allow_nan=False)
+        except (TypeError, ValueError):
+            return {'ok': False, 'code': 'INVALID_INPUT'}
+        # Idempotency needs only a digest; request contents stay out of the ledger.
+        fingerprint = hashlib.sha256(body.encode()).hexdigest()
         with self._ledger_gate:
             for key, value in list(self._operations.items()):
                 if value['result'].get('state') not in ('pending', 'running') and time.time() - value['created'] > 86400:
                     del self._operations[key]
             old = self._operations.get(request_id)
             if old:
-                return old['result'] if old['fingerprint'] == body else {'ok': False, 'code': 'REQUEST_CONFLICT'}
+                return dict(old['result']) if old['fingerprint'] == fingerprint else {'ok': False, 'code': 'REQUEST_CONFLICT'}
             if type(args.get('expected_generation')) is not int or args['expected_generation'] != self.generation:
                 return {'ok': False, 'code': 'STALE_GENERATION'}
+            if action == 'console.execute' and sum(
+                    1 for value in self._operations.values()
+                    if value['result']['action'] == 'console.execute' and
+                    value['result']['state'] in ('pending', 'running')) >= CONSOLE_JOBS:
+                return {'ok': False, 'code': 'BUSY'}
             if len(self._operations) >= 100:
                 done = next((key for key, value in self._operations.items() if value['result']['state'] not in ('pending', 'running')), None)
                 if done is None:
@@ -571,13 +812,21 @@ class CpaSupervisor:
                 del self._operations[done]
             result = {'ok': True, 'operation_id': request_id, 'action': action, 'state': 'pending',
                       'created_at': time.time(), 'generation': self.generation}
-            self._operations[request_id] = {'fingerprint': body, 'created': time.time(), 'result': result,
-                                            'policy': captured}
+            self._operations[request_id] = {'fingerprint': fingerprint, 'grant': args.get('_host_grant'),
+                                            'created': time.time(), 'result': result, 'policy': captured}
             self._queue.put_nowait(dict(args))
             if self._worker is None or not self._worker.is_alive():
                 self._worker = threading.Thread(target=self._work, daemon=True)
                 self._worker.start()
             return dict(result)
+
+    def _finish(self, request_id, result):
+        with self._ledger_gate:
+            record = self._operations[request_id]['result']
+            state = 'succeeded' if result.get('ok') else 'failed'
+            if record['action'] == 'console.execute' and result.get('code') in ('OUTCOME_UNKNOWN', 'RECONCILE_REQUIRED'):
+                state = 'unknown'
+            record.update(result, state=state, completed_at=time.time())
 
     def _work(self):
         import queue
@@ -592,6 +841,16 @@ class CpaSupervisor:
             with self._ledger_gate:
                 self._operations[request_id]['result']['state'] = 'running'
                 captured = self._operations[request_id].get('policy')
+            if action == 'console.execute':
+                # Long native/network work must not hold up lifecycle operations.
+                try:
+                    threading.Thread(target=self._console_job, args=(args, captured),
+                                     daemon=True, name='hermes-cpa-console-job').start()
+                except Exception:
+                    self._console_hook('job_rejected', args, 'UNAVAILABLE')
+                    self._finish(request_id, {'ok': False, 'code': 'UNAVAILABLE'})
+                self._queue.task_done()
+                continue
             try:
                 with self.mutation_gate:
                     self._operation_policy.request = args
@@ -619,15 +878,85 @@ class CpaSupervisor:
             finally:
                 self._operation_policy.request = None
                 self._operation_policy.captured = None
-            with self._ledger_gate:
-                record = self._operations[request_id]['result']
-                record.update(result, state='succeeded' if result.get('ok') else 'failed', completed_at=time.time())
+            self._finish(request_id, result)
             self._queue.task_done()
+
+    def _console_job(self, args, captured):
+        """One accepted console job; only a safe code reaches the generic ledger."""
+        self._operation_policy.request = args
+        self._operation_policy.captured = captured
+        dispatched = False
+        try:
+            rejected = ('POLICY_LOCKED' if self._shutdown or not self._policy_ok() else
+                        'STALE_GENERATION' if args.get('expected_generation') != self.generation
+                        else None)
+            if rejected:
+                # Let the service release reservations and record its private failure.
+                self._console_hook('job_rejected', args, rejected)
+                result = {'ok': False, 'code': rejected}
+            else:
+                dispatched = True
+                raw = self.console.execute_job(args)
+                ok = isinstance(raw, dict) and raw.get('ok') is True
+                code = raw.get('code') if isinstance(raw, dict) else None
+                result = {'ok': ok,
+                          'code': code if isinstance(code, str) and _RESULT_CODE.match(code)
+                          else 'OK' if ok else 'OUTCOME_UNKNOWN',
+                          'result_ready': isinstance(raw, dict) and raw.get('result_ready') is True}
+        except Exception:
+            code = 'OUTCOME_UNKNOWN' if dispatched else 'UNAVAILABLE'
+            self._console_hook('job_rejected', args, code)
+            result = {'ok': False, 'code': code}
+        finally:
+            self._operation_policy.request = None
+            self._operation_policy.captured = None
+        self._finish(args['request_id'], result)
+
+    def _passive_read(self, args):
+        """Fixed reduced-slice reads over the private control channel; no key."""
+        from .cpa_adapter import passive_paths
+        path = args.get('path')
+        if not isinstance(path, str) or path not in passive_paths():
+            return {'ok': False, 'code': 'INVALID_INPUT'}
+        if self._shutdown or not self._policy_ok():
+            return {'ok': False, 'code': 'POLICY_LOCKED'}
+        route, _, query = path.partition('?')
+        try:
+            response = self.control.request('GET', route, query=parse_qsl(query) or None,
+                                            headers={'Accept': 'application/json'},
+                                            timeout=self._authorized_timeout(2.),
+                                            max_response=PASSIVE_READ_LIMIT)
+        except TransportError:
+            return {'ok': False, 'code': 'UNAVAILABLE'}
+        data = None
+        if response.status == 200:
+            try:
+                data = json.loads(response.body)
+            except ValueError:
+                data = None
+        return {'status': response.status, 'data': data,
+                'version': response.headers.get('x-cpa-version', '')}
+
+    def _dispatch_console(self, op, args):
+        console = self.console
+        if console is None:
+            return {'ok': False, 'code': 'UNAVAILABLE'}
+        # Receipts for already accepted work outlive revocation: the service binds
+        # them to the original scope and withholds secret data without authority.
+        if op not in CONSOLE_RECEIPT_OPS and (self._shutdown or not self._policy_ok()):
+            return {'ok': False, 'code': 'POLICY_LOCKED'}
+        try:
+            reply = console.dispatch(op, args)
+        except Exception:
+            return {'ok': False, 'code': 'UNAVAILABLE'}
+        return reply if isinstance(reply, dict) else {'ok': False, 'code': 'UNAVAILABLE'}
 
     def dispatch(self, req):
         cmd, args = req.get('cmd'), req.get('args', {})
         if not isinstance(args, dict):
             return {'ok': False, 'code': 'INVALID_INPUT'}
+        if isinstance(cmd, str) and cmd.startswith('console.'):
+            return self._dispatch_console(cmd[len('console.'):], args)
         if cmd == 'recover':
             # Native same-user private IPC only; deliberately absent from guest
             # bridge and HTTP action schemas. Recovery never starts inference.
@@ -640,12 +969,15 @@ class CpaSupervisor:
             return self.submit(args)
         if cmd == 'status':
             return self.status()
+        if cmd == 'read':
+            return self._passive_read(args)
         if cmd == 'events':
             cursor = args.get('cursor', 0)
             if type(cursor) is not int or cursor < 0:
                 return {'ok': False, 'code': 'INVALID_INPUT'}
-            reset = bool(self._events and cursor < self._events[0]['seq'] - 1)
-            return {'events': [e for e in self._events if e['seq'] > cursor][:100], 'reset': reset}
+            events = tuple(self._events)  # Atomic snapshot; transitions run on other threads.
+            reset = bool(events and cursor < events[0]['seq'] - 1)
+            return {'events': [e for e in events if e['seq'] > cursor][:100], 'reset': reset}
         if cmd == 'operation_terminal':
             # Private backend receipt: bind retirement to the exact grant and
             # current owner generation, never a renderer's terminal assertion.
@@ -653,12 +985,12 @@ class CpaSupervisor:
                 record = self._operations.get(args.get('operation_id'))
                 if record is None or record['result']['state'] not in ('succeeded', 'failed'):
                     return {'terminal': False}
-                submitted = json.loads(record['fingerprint'])
-                return {'terminal': submitted.get('_host_grant') == args.get('grant') and
+                return {'terminal': record['grant'] == args.get('grant') and
                         args.get('generation') == self.generation}
         if cmd == 'operation':
-            record = self._operations.get(args.get('operation_id'))
-            return record['result'] if record else {'ok': False, 'code': 'RECONCILE_REQUIRED'}
+            with self._ledger_gate:
+                record = self._operations.get(args.get('operation_id'))
+                return dict(record['result']) if record else {'ok': False, 'code': 'RECONCILE_REQUIRED'}
         if cmd == 'shutdown':
             # Acknowledge the latch, not cleanup. run_ipc stops/reaps with
             # its bounded cleanup grace after sending this reply.
@@ -673,7 +1005,7 @@ class CpaSupervisor:
         if self.broker is None or not self._authorization_current():
             return
         try:
-            broker = self.broker()
+            broker = self.broker(self)
             broker.__enter__()
         except Exception:
             self.broker_state = 'unavailable'
@@ -701,6 +1033,49 @@ class CpaSupervisor:
         # Keep LOCK_EX until exit: a new registration waits for a fresh owner
         # instead of attaching to this one after it decided to stop.
         return True
+
+    def _serve_connection(self, conn):
+        """One owner IPC exchange on its own thread; the accept loop keeps policing.
+
+        Ordinary commands are one JSON line (≤64 KiB). Console commands are
+        length-framed: the header line bounds the body before allocation.
+        """
+        try:
+            with conn:
+                framed = False
+                try:
+                    peer_pid(conn)
+                    deadline = time.monotonic() + self._authorized_timeout(1.)
+                    line, rest = read_line(conn, ORDINARY_REQUEST_LIMIT, deadline)
+                    req = json.loads(line)
+                    if not isinstance(req, dict):
+                        raise ValueError('invalid_input')
+                    cmd = req.get('cmd')
+                    if isinstance(cmd, str) and cmd.startswith('console.') and 'length' in req:
+                        _, length = frame_length(line)
+                        framed = True
+                        deadline = time.monotonic() + self._authorized_timeout(CONSOLE_FRAME_SECONDS)
+                        req = {'cmd': cmd, 'args': json.loads(read_exact(conn, length, deadline, rest))}
+                    elif rest:
+                        raise ValueError('invalid_input')
+                    resp = self.dispatch(req)
+                    if framed:
+                        body = json.dumps(resp, separators=(',', ':')).encode()
+                        if len(body) > CONSOLE_IPC_LIMIT:
+                            body = b'{"ok":false,"code":"UNAVAILABLE"}'
+                        conn.settimeout(max(.001, self._authorized_timeout(CONSOLE_FRAME_SECONDS)))
+                        conn.sendall(json.dumps({'length': len(body)}).encode() + b'\n' + body)
+                    else:
+                        conn.settimeout(1.)
+                        conn.sendall(json.dumps(resp).encode() + b'\n')
+                except (ValueError, OSError, RuntimeError, TypeError):
+                    try:
+                        conn.settimeout(.1)
+                        conn.sendall(b'{"ok":false,"code":"UNAVAILABLE"}\n')
+                    except OSError:
+                        pass
+        finally:
+            self._ipc_slots.release()
 
     def run_ipc(self):
         if self.lock_file is None:
@@ -745,31 +1120,20 @@ class CpaSupervisor:
                 conn, _ = self.server_sock.accept()
             except socket.timeout:
                 continue
-            with conn:
-                conn.settimeout(1.)
-                try:
-                    peer_pid(conn)
-                    raw = bytearray()
-                    deadline = time.monotonic() + self._authorized_timeout(1.)
-                    while not raw.endswith(b'\n'):
-                        remaining = self._authorized_timeout(deadline - time.monotonic())
-                        if remaining <= 0:
-                            raise ValueError('invalid_input')
-                        conn.settimeout(remaining)
-                        chunk = conn.recv(min(4096, 65537 - len(raw)))
-                        if not chunk or len(raw) + len(chunk) > 65536:
-                            raise ValueError('invalid_input')
-                        raw.extend(chunk)
-                    req = json.loads(raw)
-                    if not isinstance(req, dict):
-                        raise ValueError('invalid_input')
-                    resp = self.dispatch(req)
-                    conn.sendall(json.dumps(resp).encode() + b'\n')
-                except (ValueError, OSError, RuntimeError, TypeError):
+            if not self._ipc_slots.acquire(blocking=False):
+                with conn:
                     try:
-                        conn.sendall(b'{"ok":false,"code":"UNAVAILABLE"}\n')
+                        conn.settimeout(.1)
+                        conn.sendall(b'{"ok":false,"code":"BUSY"}\n')
                     except OSError:
                         pass
+                continue
+            try:
+                threading.Thread(target=self._serve_connection, args=(conn,), daemon=True,
+                                 name='hermes-cpa-ipc').start()
+            except Exception:
+                self._ipc_slots.release()
+                conn.close()
         if self._shutdown:
             self.cleanup()
 
@@ -788,7 +1152,18 @@ class CpaSupervisor:
                     except Exception:
                         pass
                     self.broker_state = 'stopped'
-                self.stop_child(grace_period=min(self.stop_grace, 2.))
+                stopped = self.stop_child(grace_period=min(self.stop_grace, 2.))
+                self._console_hook('close')
+                if stopped:
+                    # A SIGKILLed child cannot unlink its sockets; the reaped
+                    # child's paths are still ours under the instance lock.
+                    for private in (self.settings.control_socket_path,
+                                    self.settings.inference_socket_path):
+                        try:
+                            if private.is_socket() and not private.is_symlink():
+                                private.unlink()
+                        except OSError:
+                            pass
                 if self.server_sock:
                     self.server_sock.close()
                 path = self.settings.socket_path

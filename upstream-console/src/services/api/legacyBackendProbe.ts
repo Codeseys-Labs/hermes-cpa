@@ -1,5 +1,7 @@
 import axios from 'axios';
 import { normalizeApiBase } from '@/utils/connection';
+import { isHosted } from '@/hosted/runtime';
+import { managementRequest } from '@/hermesTransport';
 
 /** Diagnostic only: never use v0 responses as application data or a login fallback. */
 export class LegacyBackendError extends Error {
@@ -10,6 +12,19 @@ export class LegacyBackendError extends Error {
 }
 
 export async function probeLegacyBackend(apiBase: string, managementKey: string): Promise<boolean> {
+  if (isHosted()) {
+    try {
+      const response = await managementRequest({
+        method: 'GET', path: '/v0/management/config',
+        body: { kind: 'empty' }, response_kind: 'json',
+      });
+      return response.status >= 200 && response.status < 300 &&
+        response.body.kind === 'json' && response.body.value !== null &&
+        typeof response.body.value === 'object' && !Array.isArray(response.body.value);
+    } catch {
+      return false;
+    }
+  }
   const base = normalizeApiBase(apiBase);
   if (!base || !managementKey) return false;
 

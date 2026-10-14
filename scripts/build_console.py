@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Build the paired CPAMC guest and record the exact shipped source provenance."""
 import argparse
-import base64
 import hashlib
 import json
 import os
@@ -25,8 +24,8 @@ def main():
     env = {**os.environ, 'VERSION': '1.25.6'}
     subprocess.run([args.bun, 'run', 'build'], cwd=CONSOLE, env=env, check=True)
     content = (CONSOLE / 'dist/index.html').read_bytes()
-    if len(base64.b64encode(content)) + len('data:text/html;charset=utf-8;base64,') >= 2 * 1024 * 1024:
-        raise RuntimeError('Console exceeds the supported data-URL delivery size; no asset published.')
+    if len(content) > 8 * 1024 * 1024:
+        raise RuntimeError('Console exceeds the verified-document 8 MiB limit; no asset published.')
     digest = hashlib.sha256(content).hexdigest()
     sources = {}
     published = subprocess.check_output([
@@ -42,11 +41,11 @@ def main():
     asset_manifest_path = PACKAGE / 'assets/cpamc.manifest.json'
     manifest = json.loads(asset_manifest_path.read_text())
     manifest.update(
-        adaptation_version='hermes.5-api-key-traffic', sha256=digest,
+        adaptation_version='hermes.6-full-console', sha256=digest,
         size_bytes=len(content), source_hashes=sources,
         build=f"Bun {subprocess.check_output([args.bun, '--version'], text=True).strip()}; "
               'VERSION=1.25.6 bun run build; verification recorded separately',
-        scope='docked console with bounded native consent and passive API-key traffic; full mutation parity remains deferred',
+        scope='Full pinned CPAMC via privileged host-mediated management in Agent Dashboard and Desktop; verification recorded separately',
     )
     compatibility_path = PACKAGE / 'compatibility.json'
     compatibility = json.loads(compatibility_path.read_text())

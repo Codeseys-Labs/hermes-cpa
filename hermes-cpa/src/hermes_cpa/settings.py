@@ -48,7 +48,8 @@ class CpaSettings:
         self.home = hermes_home or resolve_hermes_home()
         self.cpa_dir = self.home / "cpa"
         self.instances_dir = self.cpa_dir / "instances" / "default"
-        self.bin_dir = self.cpa_dir / "bin" / "8.0.21"
+        # The owner-channel integration build, never the stock 8.0.21 release path.
+        self.bin_dir = self.cpa_dir / "bin" / "8.0.21-hermes-owner-v1"
         self.run_dir = self.cpa_dir / "run"
         self.logs_dir = self.cpa_dir / "logs"
 
@@ -67,6 +68,19 @@ class CpaSettings:
     @property
     def socket_path(self) -> Path:
         return self.run_dir / "supervisor.sock"
+
+    @property
+    def private_dir(self) -> Path:
+        """Owner-only directory for the CPA child's private Unix channels."""
+        return self.run_dir / "private"
+
+    @property
+    def control_socket_path(self) -> Path:
+        return self.private_dir / "control.sock"
+
+    @property
+    def inference_socket_path(self) -> Path:
+        return self.private_dir / "inference.sock"
 
     @property
     def lock_path(self) -> Path:

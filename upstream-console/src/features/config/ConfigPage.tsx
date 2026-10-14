@@ -6,6 +6,7 @@ import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { useRevealGroup } from '@/hooks/motion';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import { useVisualConfig } from '@/hooks/useVisualConfig';
+import { getUiStorage } from '@/hosted/storage';
 import { useAuthStore, useNotificationStore, useThemeStore } from '@/stores';
 import {
   CONFIG_MODE_STORAGE_KEY,
@@ -80,12 +81,14 @@ export function ConfigPage() {
   } = useVisualConfig();
 
   const [mode, setMode] = useState<ConfigEditorMode>(() =>
-    requestedFieldEntry ? 'visual' : readSavedMode(localStorage.getItem(CONFIG_MODE_STORAGE_KEY))
+    requestedFieldEntry
+      ? 'visual'
+      : readSavedMode(getUiStorage('local').getItem(CONFIG_MODE_STORAGE_KEY))
   );
   const [activeSection, setActiveSection] = useState<ConfigTabId>(
     () =>
       requestedFieldEntry?.sectionId ??
-      readSavedSection(localStorage.getItem(CONFIG_SECTION_STORAGE_KEY))
+      readSavedSection(getUiStorage('local').getItem(CONFIG_SECTION_STORAGE_KEY))
   );
   const handledRequestedFieldRef = useRef<string | null>(null);
   // 首载入场：挂载后一个预算周期内为 true；此后切 tab 新挂载的卡片不再播入场。
@@ -97,7 +100,7 @@ export function ConfigPage() {
 
   // 旧「简单/完整」双模式已退役，清掉遗留的持久化键。
   useEffect(() => {
-    localStorage.removeItem(LEGACY_EDITOR_MODE_STORAGE_KEY);
+    getUiStorage('local').removeItem(LEGACY_EDITOR_MODE_STORAGE_KEY);
   }, []);
 
   const doc = useConfigDocument({
@@ -137,7 +140,7 @@ export function ConfigPage() {
     if (mode !== 'visual' || !visualParseError) return;
 
     setMode('source');
-    localStorage.setItem(CONFIG_MODE_STORAGE_KEY, 'source');
+    getUiStorage('local').setItem(CONFIG_MODE_STORAGE_KEY, 'source');
     showNotification(
       t('config_management.visual_mode_unavailable_detail', { message: visualParseError }),
       'error'
@@ -175,7 +178,7 @@ export function ConfigPage() {
       }
 
       setMode(nextMode);
-      localStorage.setItem(CONFIG_MODE_STORAGE_KEY, nextMode);
+      getUiStorage('local').setItem(CONFIG_MODE_STORAGE_KEY, nextMode);
     },
     [
       applyVisualChangesToYaml,
@@ -191,7 +194,7 @@ export function ConfigPage() {
 
   const handleSectionChange = useCallback((sectionId: ConfigTabId) => {
     setActiveSection(sectionId);
-    localStorage.setItem(CONFIG_SECTION_STORAGE_KEY, sectionId);
+    getUiStorage('local').setItem(CONFIG_SECTION_STORAGE_KEY, sectionId);
   }, []);
 
   const { jumpToField } = useFieldJump({
@@ -205,7 +208,7 @@ export function ConfigPage() {
     }
 
     handledRequestedFieldRef.current = requestedFieldEntry.fieldId;
-    localStorage.setItem(CONFIG_MODE_STORAGE_KEY, 'visual');
+    getUiStorage('local').setItem(CONFIG_MODE_STORAGE_KEY, 'visual');
     jumpToField(requestedFieldEntry);
 
     const nextSearchParams = new URLSearchParams(location.search);

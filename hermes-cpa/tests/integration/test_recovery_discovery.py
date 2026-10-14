@@ -19,7 +19,7 @@ def test_recovery_discovery_is_safe_read_only_and_identifies_exact_bytes(tmp_pat
     before = {p: p.read_bytes() for p in settings.cpa_dir.rglob('*') if p.is_file()}
     report = controller.recovery_status()
     assert report == dict(available=True, generation=0, owner_available=False,
-                         current_revision=original, snapshot_revision=original,
+                         current_revision=original, snapshot_revision=original, candidate_revision='',
                          journal_phase='applying', recovery_required=True)
     assert 'GENERATED-CANARY' not in json.dumps(report)
     assert before == {p: p.read_bytes() for p in settings.cpa_dir.rglob('*') if p.is_file()}

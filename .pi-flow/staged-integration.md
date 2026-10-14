@@ -1,6 +1,6 @@
 # Staged integration execution contract
 
-The user selected staged integration with a private GitHub tracker, then authorized taking over implementation and private publication. The Wayfinder map is https://github.com/baladithyab/hermes-cpa/issues/1. The host/package/ownership decision is https://github.com/baladithyab/hermes-cpa/issues/2. Full credential/OAuth/quota/plugin mutation parity remains deferred.
+The user selected staged integration with a private GitHub tracker and authorized implementation and private publication. The Wayfinder map is https://github.com/baladithyab/hermes-cpa/issues/1. The host/package/ownership decision is https://github.com/baladithyab/hermes-cpa/issues/2. The user now explicitly prioritizes full CPAMC configuration, API-key and OAuth/credential parity through the agent-owned instance and optional Desktop UI; https://github.com/baladithyab/hermes-cpa/issues/5 owns that contract. This supersedes the earlier mutation implementation deferral, not the restrictions on real accounts, credentials, live deployments or external provider authorization.
 
 ## Source ownership
 
@@ -12,11 +12,11 @@ Preserve original `/home/codeseys/.hermes/projects/hermes-cpa-fidelity-r1` snaps
 
 ## Required behavior
 
-After explicit trusted setup consent, Hermes can acquire the checksum-pinned CPA archive or use a local archive, prepare separate management/inference credentials, and establish an owned managed instance and broker-backed provider. Opt-in managed startup is remembered and follows native Hermes plugin lifetime; default/external registration remains inert. Shutdown must affect only exact-owned resources. Unsupported hosts must fail before credential/config writes or process launch. Per-profile grants remain fail-closed and models remain discovered through the inference broker, not the management guest.
+After explicit trusted setup consent, Hermes can acquire the checksum-pinned private-channel CPA archive or use the verified local archive, generate user-managed public access configuration, and establish an owned managed instance and broker-backed provider. Managed control and inference use private Unix channels rather than public CPA keys. Opt-in startup follows native Hermes plugin lifetime; default/external registration remains inert. Shutdown must affect only exact-owned resources. Unsupported hosts must fail before configuration writes or process launch. Per-profile grants remain fail-closed and models remain discovered through the inference broker, not the management guest.
 
 An unrelated edit to Hermes config must not revoke a managed owner, while actual plugin disable/removal and relevant policy changes must revoke it. Do not weaken stale-request or ABA protections to fix this.
 
-The optional desktop half uses Monitoring Dashboard's docked workspace mechanism, bounded host REST and an opaque sandbox. Integrate the understood consent phase repair with both ends of its wire protocol. Preserve current safe read/config functionality. Do not replace the console with placeholders or integrate the incomplete whole-port branch in a way that removes the working config/inventory routes.
+The Agent Dashboard and optional Desktop half host the full pinned CPAMC application through bounded host REST and an opaque sandbox; Desktop uses Monitoring Dashboard's docked workspace mechanism. Trusted unlock permits the guest to manage ordinary user-owned CPA/provider keys and OAuth credentials, but not Hermes session tokens or private owner/broker authority. Native plugin pages use separate, incarnation-bound resource grants. Existing roots with legacy private CPA keys are not silently migrated; isolated transitions retain the old root and may explicitly preserve only the generated Hermes session token through stdin.
 
 ## Shared interface
 
@@ -28,4 +28,12 @@ The backend worker owns native Python lifecycle, CLI, onboarding/provider code, 
 
 Workers skip builds/lint/tests/formatters mid-flight. Write meaningful behavioral regressions and supply commands, but parent runs the combined checks once after integration. Parent's existing disposable reproductions already show old InstallPolicy revocation after unrelated config writes and installed-host reuse of zero-TTL grants. Any new permanent tests must exercise consumer-visible transitions, boundaries or failures, never source wording or implementation wiring.
 
-Source publication is not acceptance of deferred full CPAMC parity. Keep compatibility/acceptance metadata truthful; do not make an untested release installable merely by flipping flags. Preserve an explicit generated-data validation permit until actual supported-host qualification is complete.
+Source publication is not production or packaged-release acceptance. Keep compatibility/acceptance metadata truthful; do not make an untested release installable merely by flipping flags. Preserve an explicit generated-data validation permit until actual supported-host qualification is complete.
+
+## Qualified private candidate — 2026-10-14
+
+The full pinned CPAMC port passed generated-data qualification in native Windows Desktop, Linux Desktop and four Agent Dashboard origins: HTTP, remapped HTTP, authenticated HTTPS and HTTPS without forwarded-protocol headers. Dashboard and Desktop exercised OAuth and native API-key persistence; resource proofs covered opaque origins, native effects, navigation containment, concurrent console work and revocation during delivery. Runtime/provider proofs covered ordinary/SSE inference, model discovery without reenrollment, and disable/remove refusal without fallback. Root README records the exercised gates and limitations.
+
+The maintained isolated `hermes-cpa-dev` stack uses `/work/q-parity`, retaining all of `/work/q` and its generated Hermes token. Image/root selection is in the ignored `.verification/maintained-compose.env`; no credential is stored there. Managed health passed after the transition. The explicit permit expires at 2026-10-14T18:37:14Z; expiry is intentional, not an instruction to renew automatically.
+
+Private source/runtime publication remains subject to the parent's exact commit-message and candidate-publication approval. Source qualification does not change the Proposed ADR, unset minimum supported Desktop version, or unaccepted product-release metadata.

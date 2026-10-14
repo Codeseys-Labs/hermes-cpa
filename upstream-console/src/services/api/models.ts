@@ -7,6 +7,8 @@ import { normalizeModelList } from '@/utils/models';
 import { normalizeApiBase } from '@/utils/connection';
 import { apiCallApi, getApiCallErrorMessage } from './apiCall';
 import { isRecord } from '@/utils/helpers';
+import { isHosted } from '@/hosted/runtime';
+import { apiClient } from './client';
 
 const DEFAULT_CLAUDE_BASE_URL = 'https://api.anthropic.com';
 const DEFAULT_GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com';
@@ -87,6 +89,11 @@ export const modelsApi = {
    * Fetch available models from /v1/models endpoint (for system info page)
    */
   async fetchModels(baseUrl: string, apiKey?: string, headers: Record<string, string> = {}) {
+    if (isHosted()) {
+      const data: unknown = await apiClient.get('/v1/models');
+      const payload = isRecord(data) ? data.data ?? data.models ?? data : data;
+      return normalizeModelList(payload, { dedupe: true });
+    }
     const endpoint = buildV1ModelsEndpoint(baseUrl);
     if (!endpoint) {
       throw new Error('Invalid base url');

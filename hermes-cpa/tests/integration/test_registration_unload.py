@@ -2,7 +2,6 @@
 
 Generated home and a harmless child owned by an in-process owner. No real CPA.
 """
-import socket
 import sys
 import threading
 import time
@@ -41,11 +40,8 @@ def test_unrelated_unload_keeps_shared_owner_and_disable_revokes(tmp_path, monke
     settings = CpaSettings(home)
     settings.ensure_directories()
     (home / 'config.yaml').write_text(ENABLED.replace('MODE', 'managed'))
-    with socket.socket() as sock:
-        sock.bind(('127.0.0.1', 0))
-        port = sock.getsockname()[1]
     # A long watchdog interval isolates unload: the owner samples policy once at start.
-    owner = CpaSupervisor(settings, mode='managed', port=port,
+    owner = CpaSupervisor(settings, mode='managed',
         probe=lambda timeout: SimpleNamespace(management_ready=True, compatible=True,
                                              inference_configured=False),
         policy=InstallPolicy(home, PACKAGE), command=[sys.executable, '-c', 'import time; time.sleep(30)'],

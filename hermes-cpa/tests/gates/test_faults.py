@@ -9,7 +9,7 @@ from hermes_cpa import installer as module
 
 
 @pytest.mark.parametrize('kind', ['symlink', 'hardlink', 'fifo', 'device', 'special', 'backslash', 'absolute', 'traversal'])
-def test_archive_unsafe_kinds(case, monkeypatch, kind):
+def test_archive_unsafe_kinds(case, kind):
     info = tarfile.TarInfo('extra')
     if kind in ('symlink', 'hardlink'):
         info.type = tarfile.SYMTYPE if kind == 'symlink' else tarfile.LNKTYPE
@@ -22,12 +22,13 @@ def test_archive_unsafe_kinds(case, monkeypatch, kind):
         info.mode = 0o4755
     else:
         info.name = {'backslash': 'a\\b', 'absolute': '/escape', 'traversal': '../escape'}[kind]
-    make_archive(case.archive, monkeypatch, [info])
+    make_archive(case.archive, [info], root=case.root)
     assert invoke(case, 'upgrade')['code'] == 'INVALID_TARGET'
     assert not case.owner.calls and not case.settings.bin_dir.exists()
 
 
-@pytest.mark.parametrize('target', ['compatibility.json', 'assets/cpamc.manifest.json', 'assets/cpamc.html', 'LICENSE'])
+@pytest.mark.parametrize('target', ['compatibility.json', 'cpa-runtime.json', 'assets/cpamc.manifest.json',
+                                    'assets/cpamc.html', 'LICENSE'])
 def test_package_symlinks_rejected(case, target):
     path = case.root / target
     outside = case.tmp / 'outside'

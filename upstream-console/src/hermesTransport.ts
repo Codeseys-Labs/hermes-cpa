@@ -1,137 +1,250 @@
-// Per-document ephemeral transport; no browser storage or management credentials.
-type Op = 'status.read' | 'usage.read' | 'config.read' | 'config.apply'
-  | 'providers.read' | 'auth.read' | 'models.read' | 'quota.read' | 'logs.read' | 'plugins.read';
-type Phase = 'preview' | 'consent' | 'commit';
+import { isRecord } from '@/utils/helpers';
+import { isHosted } from '@/hosted/runtime';
+import { clearHostedStorage } from '@/hosted/storage';
+import { MAX_WIRE_BYTES, parseManagementResponse } from '@/hosted/management';
+import type { ManagementRequest, ManagementResponse } from '@/hosted/management';
 
+export interface HostOperations {
+  'management.request': ManagementRequest;
+  'management.transaction': { requests: ManagementRequest[]; expected_revision: string };
+  'browser.open': { url: string };
+  'browser.copy': { text: string };
+  'file.save': { filename: string; content_type: string; base64: string };
+  'plugin.open': { plugin_id: string; menu_index: number };
+  'session.lock': Record<string, never>;
+}
 export type HostFailureKind = 'unavailable' | 'consent-expired' | 'outcome-unknown';
-
-/** Every rejection from the host bridge; `kind` is the only part callers should branch on. */
 export class HostRequestError extends Error {
-  readonly kind: HostFailureKind;
-  constructor(kind: HostFailureKind, message: string) {
+  constructor(readonly kind: HostFailureKind, message: string) {
     super(message);
     this.name = 'HostRequestError';
-    this.kind = kind;
   }
 }
 
-type Pending = { resolve: (value: unknown) => void; reject: (error: HostRequestError) => void;
-  timer: ReturnType<typeof setTimeout>; op: Op; phase: Phase };
-
-const OUTCOME_UNKNOWN = 'Outcome unknown; reconcile without resubmitting';
-const READ_MS = 10000;
-// Host phase budgets (desktop/plugin.js) plus one second of delivery slack, so the trusted host
-// always closes first. Only a host PHASE message moves a request to its next phase; nothing the
-// guest supplies, and no repeated or backward phase, renews a deadline.
-const SLACK_MS = 1000;
-const BUDGET_MS: Record<Phase, number> = {
-  preview: 20000 + SLACK_MS, consent: 120000 + SLACK_MS, commit: 30000 + SLACK_MS,
+type Pending = {
+  resolve: (value: unknown) => void;
+  reject: (error: HostRequestError) => void;
+  timer: ReturnType<typeof setTimeout>;
+  effectful: boolean;
+  bytes: number;
 };
-const PHASE_ORDER: Record<Phase, Phase | undefined> = {
-  preview: 'consent', consent: 'commit', commit: undefined,
-};
-let port: MessagePort | undefined;
-let generation: string | undefined;
-let nonce: string | undefined;
-let established = false;
-let revoked = false;
-let sequence = 0;
-const pending = new Map<string, Pending>();
-let initialize: (() => void) | undefined;
-const ready = new Promise<void>(resolve => { initialize = resolve; });
+const OUTCOME_UNKNOWN = 'Outcome unknown; reconcile in the host without resubmitting';
+const HOST_BUSY = 'The host was busy and did not forward the request; nothing changed. Try again';
+const MAX_PENDING_BYTES = 64 * 1024 * 1024;
 
-function revoke() {
-  revoked = true;
-  port?.close();
-  port = undefined;
-  for (const item of pending.values()) {
-    clearTimeout(item.timer);
-    item.reject(item.op === 'config.apply' && item.phase === 'commit'
-      ? new HostRequestError('outcome-unknown', OUTCOME_UNKNOWN)
-      : new HostRequestError('unavailable', 'Transport revoked'));
-  }
-  pending.clear();
-}
-
-if (typeof window !== 'undefined') window.addEventListener('message', event => {
-  if (event.source !== parent || port || revoked || event.ports.length !== 1) return;
-  const data = event.data;
-  if (data?.type !== 'cpa-bridge-init' || data.v !== 2 ||
-      typeof data.nonce !== 'string' || data.nonce.length < 16 || data.nonce.length > 128 ||
-      typeof data.generation !== 'string' || data.generation.length < 16 || data.generation.length > 128) return;
-  generation = data.generation;
-  nonce = data.nonce;
-  port = event.ports[0];
-  port.onmessage = ({ data: response }) => {
-    if (!established) {
-      if (response?.v !== 2 || response.type !== 'READY' || response.nonce !== nonce ||
-          response.generation !== generation) { revoke(); return; }
-      established = true;
-      port!.postMessage({ v: 2, type: 'ACK', nonce, generation });
-      initialize?.();
-      return;
-    }
-    if (!response || response.v !== 2 || response.generation !== generation ||
-        typeof response.id !== 'string') return;
-    let size: number;
-    try { size = new TextEncoder().encode(JSON.stringify(response)).length; } catch { revoke(); return; }
-    if (size > 1048576) { revoke(); return; }
-    const item = pending.get(response.id);
-    if (!item) return;
-    if (response.type === 'PHASE') {
-      const next = response.phase === PHASE_ORDER[item.phase] ? PHASE_ORDER[item.phase] : undefined;
-      if (item.op !== 'config.apply' || !next ||
-          Object.keys(response).some(key => !['v', 'type', 'id', 'generation', 'phase'].includes(key))) {
-        revoke(); return;
-      }
-      clearTimeout(item.timer);
-      item.phase = next;
-      item.timer = setTimeout(() => {
-        pending.delete(response.id);
-        item.reject(next === 'commit'
-          ? new HostRequestError('outcome-unknown', OUTCOME_UNKNOWN)
-          : new HostRequestError('consent-expired', 'Consent expired'));
-        revoke();
-      }, BUDGET_MS[next]);
-      return;
-    }
-    if (response.type !== undefined) { revoke(); return; }
-    clearTimeout(item.timer);
-    pending.delete(response.id);
-    if (response.ok === true) item.resolve(response.data);
-    else item.reject(response.error?.code === 'RECONCILE_REQUIRED'
-      ? new HostRequestError('outcome-unknown', OUTCOME_UNKNOWN)
-      : new HostRequestError('unavailable', 'Host request failed'));
-  };
-  port.start();
-  port.onmessageerror = revoke;
-  port.postMessage({ v: 2, type: 'HELLO', nonce, generation });
-});
-if (typeof window !== 'undefined') window.addEventListener('pagehide', revoke);
-
-export async function request(op: Op, args: unknown = {}): Promise<unknown> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([ready, new Promise<never>((_, reject) => {
-      timer = setTimeout(() => { revoke(); reject(new HostRequestError('unavailable', 'Host unavailable')); }, READ_MS);
-    })]);
-  } finally { clearTimeout(timer); }
-  const channel = port;
-  if (!channel || pending.size >= 32) throw new HostRequestError('unavailable', 'Transport unavailable or busy');
-  const id = String(++sequence);
-  const message = { v: 2, id, generation, op, args };
-  if (new TextEncoder().encode(JSON.stringify(message)).length > 1048576) {
-    throw new HostRequestError('unavailable', 'Oversized request');
-  }
-  return new Promise((resolve, reject) => {
-    // A mutation's first budget covers only the host preview; human review starts at PHASE.
-    const timer = setTimeout(() => {
-      pending.delete(id);
-      reject(new HostRequestError('unavailable', op === 'config.apply'
-        ? 'Preview unavailable; no admission requested' : 'Host timeout'));
-      revoke();
-    }, op === 'config.apply' ? BUDGET_MS.preview : READ_MS);
-    pending.set(id, { resolve, reject, timer, op, phase: 'preview' });
-    channel.postMessage(message);
+/** One document, one unlocked port, no reconnect or mutation replay. */
+export class HostedTransport {
+  readonly clientNonce = crypto.randomUUID();
+  private sessionId: string | undefined;
+  private port: MessagePort | undefined;
+  private state: 'connecting' | 'unlocked' | 'closed' = 'connecting';
+  private sequence = 0;
+  private pending = new Map<string, Pending>();
+  private pendingBytes = 0;
+  private readyResolve!: () => void;
+  private readyReject!: (error: HostRequestError) => void;
+  readonly ready = new Promise<void>((resolve, reject) => {
+    this.readyResolve = resolve;
+    this.readyReject = reject;
   });
+  private handshakeTimer: ReturnType<typeof setTimeout>;
+
+  constructor(
+    private readonly onClose: () => void,
+    private readonly timeoutMs = 600_000,
+    handshakeTimeoutMs = 10_000
+  ) {
+    // A caller may attach before awaiting ready. Keep an early close from becoming unhandled.
+    void this.ready.catch(() => {});
+    this.handshakeTimer = setTimeout(() => this.close(), handshakeTimeoutMs);
+  }
+
+  get unlocked(): boolean { return this.state === 'unlocked'; }
+
+  /** Called only after the window listener verifies the exact parent and transferred port. */
+  acceptInitialization(data: unknown, channel: MessagePort): boolean {
+    if (this.state !== 'connecting' || this.port || !isRecord(data) ||
+        data.type !== 'hermes:cpa:init' || data.protocol !== 3 ||
+        data.client_nonce !== this.clientNonce || data.unlocked !== true ||
+        typeof data.session_id !== 'string' || data.session_id.length < 16 ||
+        data.session_id.length > 128) {
+      channel.close();
+      return false;
+    }
+    this.sessionId = data.session_id;
+    this.port = channel;
+    channel.onmessageerror = () => this.close();
+    channel.onmessage = ({ data: message }: MessageEvent<unknown>) => {
+      if (!isRecord(message) || message.protocol !== 3 || message.session_id !== this.sessionId) {
+        return;
+      }
+      if (this.state === 'connecting') {
+        if (message.type !== 'hermes:cpa:ready' || message.client_nonce !== this.clientNonce ||
+            message.unlocked !== true) {
+          this.close();
+          return;
+        }
+        clearTimeout(this.handshakeTimer);
+        this.state = 'unlocked';
+        channel.postMessage({
+          type: 'hermes:cpa:ack', protocol: 3,
+          session_id: this.sessionId, client_nonce: this.clientNonce,
+        });
+        this.readyResolve();
+        return;
+      }
+      if (message.type === 'hermes:cpa:locked') {
+        this.close();
+        return;
+      }
+      if (this.state !== 'unlocked' || message.type !== 'hermes:cpa:response' ||
+          typeof message.id !== 'string') return;
+      const item = this.pending.get(message.id);
+      if (!item) return;
+      let bytes: number;
+      try { bytes = new TextEncoder().encode(JSON.stringify(message)).length; }
+      catch { this.close(); return; }
+      if (bytes > MAX_WIRE_BYTES) { this.close(); return; }
+      clearTimeout(item.timer);
+      this.pending.delete(message.id);
+      this.pendingBytes -= item.bytes;
+      if (message.ok === true && 'result' in message) {
+        item.resolve(message.result);
+      } else if (message.ok === false && isRecord(message.error)) {
+        const code = message.error.code;
+        const unknown = code === 'RECONCILE_REQUIRED' || code === 'OUTCOME_UNKNOWN';
+        item.reject(new HostRequestError(
+          unknown ? 'outcome-unknown' : code === 'CONSENT_EXPIRED' ? 'consent-expired' : 'unavailable',
+          unknown ? OUTCOME_UNKNOWN : code === 'HOST_BUSY' ? HOST_BUSY : 'Host request was not completed'
+        ));
+        if (unknown) this.close();
+      } else {
+        item.reject(new HostRequestError(item.effectful ? 'outcome-unknown' : 'unavailable',
+          item.effectful ? OUTCOME_UNKNOWN : 'Invalid host response'));
+        this.close();
+      }
+    };
+    channel.start();
+    channel.postMessage({
+      type: 'hermes:cpa:hello', protocol: 3,
+      session_id: this.sessionId, client_nonce: this.clientNonce,
+    });
+    return true;
+  }
+
+  async request<K extends keyof HostOperations>(operation: K, payload: HostOperations[K]): Promise<unknown> {
+    await this.ready;
+    const channel = this.port;
+    if (this.state !== 'unlocked' || !channel) {
+      throw new HostRequestError('unavailable', 'Console is locked');
+    }
+    const id = String(++this.sequence);
+    const message = {
+      type: 'hermes:cpa:request', protocol: 3, session_id: this.sessionId, id, operation, payload,
+    };
+    const bytes = new TextEncoder().encode(JSON.stringify(message)).length;
+    if (bytes > MAX_WIRE_BYTES || this.pending.size >= 32 ||
+        this.pendingBytes + bytes > MAX_PENDING_BYTES) {
+      throw new HostRequestError('unavailable', 'Host request exceeds the transport capacity');
+    }
+    const effectful = operation !== 'management.request' ||
+      ('method' in payload && (payload.method !== 'GET' || payload.path.endsWith('/oauth/auth-url')));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        this.pendingBytes -= bytes;
+        reject(new HostRequestError(effectful ? 'outcome-unknown' : 'unavailable',
+          effectful ? OUTCOME_UNKNOWN : 'Host request timed out'));
+        this.close();
+      }, this.timeoutMs);
+      this.pending.set(id, { resolve, reject, timer, effectful, bytes });
+      this.pendingBytes += bytes;
+      try { channel.postMessage(message); }
+      catch { this.close(); }
+    });
+  }
+
+  close(): void {
+    if (this.state === 'closed') return;
+    this.state = 'closed';
+    clearTimeout(this.handshakeTimer);
+    this.port?.close();
+    this.port = undefined;
+    this.readyReject(new HostRequestError('unavailable', 'Host unavailable or console locked'));
+    for (const item of this.pending.values()) {
+      clearTimeout(item.timer);
+      item.reject(new HostRequestError(item.effectful ? 'outcome-unknown' : 'unavailable',
+        item.effectful ? OUTCOME_UNKNOWN : 'Console is locked'));
+    }
+    this.pending.clear();
+    this.pendingBytes = 0;
+    this.onClose();
+  }
+}
+
+let transport: HostedTransport | undefined;
+export function getHostedTransport(): HostedTransport {
+  if (!isHosted() || typeof window === 'undefined' || window.parent === window) {
+    throw new HostRequestError('unavailable', 'Trusted console host is required');
+  }
+  if (!transport) {
+    const host = window.parent;
+    const listener = (event: MessageEvent<unknown>) => {
+      if (event.source !== host || event.ports.length !== 1) return;
+      transport?.acceptInitialization(event.data, event.ports[0]);
+    };
+    transport = new HostedTransport(() => {
+      window.removeEventListener('message', listener);
+      clearHostedStorage();
+      window.dispatchEvent(new Event('hermes-console-locked'));
+    });
+    window.addEventListener('message', listener);
+    window.addEventListener('pagehide', () => transport?.close(), { once: true });
+    host.postMessage({
+      type: 'hermes:cpa:connect', protocol: 3, client_nonce: transport.clientNonce,
+    }, '*');
+  }
+  return transport;
+}
+
+export async function managementRequest(payload: ManagementRequest): Promise<ManagementResponse> {
+  const channel = getHostedTransport();
+  const value = await channel.request('management.request', payload);
+  try {
+    return parseManagementResponse(value);
+  } catch {
+    channel.close();
+    const effectful = payload.method !== 'GET' || payload.path.endsWith('/oauth/auth-url');
+    throw new HostRequestError(effectful ? 'outcome-unknown' : 'unavailable',
+      effectful ? OUTCOME_UNKNOWN : 'Invalid management response');
+  }
+}
+
+export async function managementTransaction(
+  requests: ManagementRequest[], expectedRevision: string
+): Promise<ManagementResponse> {
+  const channel = getHostedTransport();
+  const value = await channel.request('management.transaction', {
+    requests, expected_revision: expectedRevision,
+  });
+  try {
+    return parseManagementResponse(value);
+  } catch {
+    channel.close();
+    throw new HostRequestError('outcome-unknown', OUTCOME_UNKNOWN);
+  }
+}
+
+/** Revoke local access immediately, even if the host lock acknowledgement is lost. */
+export async function lockHostedSession(): Promise<void> {
+  const channel = getHostedTransport();
+  try {
+    const pending = channel.request('session.lock', {}).catch(() => undefined);
+    // request() posts after its ready microtask, before this continuation closes the port.
+    await Promise.resolve();
+    channel.close();
+    await pending;
+  } catch {
+    channel.close();
+  }
 }

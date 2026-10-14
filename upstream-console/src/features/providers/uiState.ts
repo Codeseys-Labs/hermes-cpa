@@ -1,3 +1,4 @@
+import { getUiStorage } from '@/hosted/storage';
 import { isRecord } from '@/utils/helpers';
 import { PROVIDER_BRAND_ORDER } from './descriptors';
 import {
@@ -75,10 +76,8 @@ export const getProviderFilterState = (
 ): ProviderFilterState => state.filtersByBrand[brand] ?? DEFAULT_PROVIDER_FILTER_STATE;
 
 export const readProvidersWorkbenchUiState = (): ProvidersWorkbenchUiState => {
-  if (typeof window === 'undefined') return createDefaultProvidersWorkbenchUiState();
-
   try {
-    const raw = window.localStorage.getItem(PROVIDERS_UI_STATE_KEY);
+    const raw = getUiStorage('local').getItem(PROVIDERS_UI_STATE_KEY);
     if (!raw) return createDefaultProvidersWorkbenchUiState();
 
     const parsed = JSON.parse(raw);
@@ -103,9 +102,8 @@ export const readProvidersWorkbenchUiState = (): ProvidersWorkbenchUiState => {
 };
 
 export const writeProvidersWorkbenchUiState = (state: ProvidersWorkbenchUiState) => {
-  if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(PROVIDERS_UI_STATE_KEY, JSON.stringify(state));
+    getUiStorage('local').setItem(PROVIDERS_UI_STATE_KEY, JSON.stringify(state));
   } catch {
     // ignore storage failures
   }

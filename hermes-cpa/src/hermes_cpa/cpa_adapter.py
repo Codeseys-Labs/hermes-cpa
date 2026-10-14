@@ -1,4 +1,9 @@
-"""Backend-only bounded CPA transport. Never return upstream config or headers."""
+"""Backend-only bounded passive CPA reads. Never return upstream config or headers.
+
+External mode reaches CPA over literal-loopback HTTP with the profile's
+management key. Managed mode replaces ``_request`` with the verified owner's
+private control channel (controller.OwnerReadAdapter); it holds no key.
+"""
 import ipaddress
 import json
 import urllib.error
@@ -18,6 +23,13 @@ class ProbeResult:
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
+
+
+def passive_paths():
+    """Fixed passive management reads for the reduced projection slice."""
+    from .management_features import FEATURE_PATHS
+    return ('/v8/management/config', '/v8/management/observability/usage/api-keys',
+            *(value for value in FEATURE_PATHS.values() if value is not None))
 
 
 class CpaAdapter:
@@ -41,9 +53,7 @@ class CpaAdapter:
         return cls(base_url, secret=lambda: resolver.resolve_management(scope))
 
     def _request(self, path, timeout=5.0):
-        from .management_features import FEATURE_PATHS
-        if path not in ('/v8/management/config', '/v8/management/observability/usage/api-keys',
-                        *(value for value in FEATURE_PATHS.values() if value is not None)):
+        if path not in passive_paths():
             return 0, None, None
         try:
             key = self._secret()

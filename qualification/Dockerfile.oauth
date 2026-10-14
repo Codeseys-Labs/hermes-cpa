@@ -1,0 +1,18 @@
+# Disposable test image only. Never use this certificate-trusting image for deployment.
+ARG CPA_QUALIFICATION_IMAGE
+FROM ${CPA_QUALIFICATION_IMAGE}
+USER root
+RUN mkdir -p /opt/q/oauth-fixture \
+    && openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+       -subj /CN=HermesCPAQualificationOnly \
+       -addext 'subjectAltName=DNS:platform.claude.com,DNS:api.anthropic.com' \
+       -addext 'extendedKeyUsage=serverAuth' \
+       -keyout /opt/q/oauth-fixture/key.pem -out /opt/q/oauth-fixture/cert.pem \
+    && cp /opt/q/oauth-fixture/cert.pem /usr/local/share/ca-certificates/hermes-cpa-qualification.crt \
+    && /usr/sbin/update-ca-certificates \
+    && chown -R 10001:10001 /opt/q/oauth-fixture \
+    && chmod 0700 /opt/q/oauth-fixture && chmod 0600 /opt/q/oauth-fixture/key.pem
+COPY --chown=10001:10001 qualification/oauth_fixture.py qualification/parity_smoke.py /opt/q/qualification/
+LABEL dev.hermes.qualification="generated OAuth fixture trust; never deploy"
+USER 10001:10001
+ENTRYPOINT ["python", "/opt/q/qualification/parity_smoke.py"]

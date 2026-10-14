@@ -1,0 +1,50 @@
+# Disposable network-none UI qualification; not the maintained deployment image.
+ARG CPA_OAUTH_QUALIFICATION_IMAGE
+FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS node-tools
+FROM ${CPA_OAUTH_QUALIFICATION_IMAGE} AS ui-runtime
+USER root
+ENV PATH=/opt/q/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+RUN test -r /opt/q/oauth-fixture/cert.pem
+COPY --from=node-tools /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && apt-get update && apt-get install -y --no-install-recommends \
+       build-essential xvfb xauth dbus-x11 fonts-liberation \
+       libglib2.0-0 libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+       libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
+       libxkbcommon0 libgtk-3-0 \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /opt/q/host
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 PLAYWRIGHT_BROWSERS_PATH=/opt/q/playwright-browsers
+RUN npm ci --workspace apps/desktop --workspace web --workspace tests-js --include-workspace-root --no-audit --no-fund
+RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0 node /opt/q/host/node_modules/playwright/cli.js install --with-deps chromium
+RUN npm run build --workspace web && npm run build --workspace apps/desktop
+COPY --chown=10001:10001 qualification/desktop_prepare.py qualification/ui_oauth_fixture.py qualification/oauth_fixture.py qualification/run_ui.py /opt/q/qualification/
+COPY --chown=10001:10001 qualification/desktop-parity.spec.ts /opt/q/host/apps/desktop/e2e/hermes-cpa-parity.spec.ts
+COPY --chown=10001:10001 qualification/dashboard_scenario.py /opt/q/qualification/
+COPY --chown=10001:10001 qualification/dashboard-parity.spec.ts /opt/q/host/apps/desktop/e2e/hermes-cpa-dashboard-parity.spec.ts
+COPY --chown=10001:10001 qualification/native-resource-ui.ts /opt/q/host/apps/desktop/e2e/hermes-cpa-resource-ui.ts
+COPY --chown=10001:10001 qualification/native-resource-fixture /opt/q/qualification/native-resource-fixture
+COPY --from=native-resource-fixture --chown=10001:10001 / /opt/q/cache/native-resource-fixture/
+RUN chown -R 10001:10001 /opt/q/host/apps/desktop/dist /opt/q/host/hermes_cli/web_dist
+USER 10001:10001
+WORKDIR /opt/q/host/apps/desktop
+ENV HERMES_DESKTOP_PYTHON=/opt/q/venv/bin/python
+ENTRYPOINT ["xvfb-run", "-a", "node", "/opt/q/host/node_modules/@playwright/test/cli.js", "test", "e2e/hermes-cpa-parity.spec.ts", "--retries=0", "--workers=1", "--reporter=list", "--output=/work/ui-results"]
+
+FROM ui-runtime AS qualified
+USER root
+WORKDIR /opt/q/host
+RUN --network=none npm run typecheck --workspace apps/desktop \
+    && npm run test:desktop:platforms --workspace apps/desktop -- \
+       electron/external-open.test.ts electron/oauth-session-response.test.ts \
+       electron/plugin-file-save.test.ts electron/plugin-file-save-ipc.test.ts \
+       electron/plugin-resource-presentation.test.ts electron/plugin-resource-ipc.test.ts \
+       electron/plugin-session-ipc.test.ts electron/renderer-log.test.ts \
+    && npm run test:ui --workspace apps/desktop -- \
+       src/api/plugin-session.test.ts src/api/plugin-resource.test.ts \
+       src/components/ui/sandboxed-frame-document.test.tsx src/contrib/plugin.test.ts \
+    && npm run test --workspace web -- src/plugins/PluginPage.test.tsx src/plugins/session.test.ts
+RUN --network=none npm run test --workspace tests-js -- allow-scripts-sync.test.ts node-engine-alignment.test.ts
+USER 10001:10001
+WORKDIR /opt/q/host/apps/desktop

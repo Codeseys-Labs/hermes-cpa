@@ -41,11 +41,8 @@ def detached(tmp_path):
     package.mkdir()
     (package / 'plugin.yaml').write_text('name: hermes-cpa\n')
     (home / 'config.yaml').write_text('plugins:\n  enabled: [hermes-cpa]\n  entries:\n    hermes-cpa:\n      settings: {mode: managed}\n')
-    with socket.socket() as s:
-        s.bind(('127.0.0.1', 0))
-        port = s.getsockname()[1]
-    cmd = [sys.executable, str(Path(__file__).with_name('fixture_owner.py')), str(home), str(package), str(port)]
-    controller = CpaController(settings, mode='managed', launch_command=cmd, timeout=2.)
+    cmd = [sys.executable, str(Path(__file__).with_name('fixture_owner.py')), str(home), str(package)]
+    controller = CpaController(settings, mode='managed', launch_command=cmd, timeout=5.)
     pids = []
     yield controller, package, pids
     controller.unload()
@@ -137,7 +134,7 @@ def test_trickling_control_request_does_not_hold_owner(detached):
 @pytest.mark.parametrize('change', ['disable', 'remove', 'corrupt'])
 def test_watchdog_stops_and_reaps(detached, change):
     controller, package, pids = detached
-    assert controller.start()
+    assert controller.start(), controller.snapshot()
     pids.append(controller.snapshot()['pid'])
     started = time.monotonic()
     if change == 'remove':

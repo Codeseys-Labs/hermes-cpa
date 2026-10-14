@@ -31,10 +31,7 @@ def harmless_owner(tmp_path, *, authorization=None):
     settings = CpaSettings(tmp_path)
     settings.ensure_directories()
     settings.config_path.write_text('server: {host: 127.0.0.1, port: 8318}\n')
-    with socket.socket() as s:
-        s.bind(('127.0.0.1', 0))
-        port = s.getsockname()[1]
-    sup = CpaSupervisor(settings, mode='managed', port=port, probe=unavailable,
+    sup = CpaSupervisor(settings, mode='managed', probe=unavailable,
                         policy=lambda: True, readiness_timeout=.25,
                         authorization=authorization,
                         command=[sys.executable, '-c', 'import time; time.sleep(30)'])
@@ -97,15 +94,33 @@ def test_early_exit_and_explicit_restart(owner):
     assert owner.start_child()
 
 
-def test_occupied_port_never_adopted(owner):
-    owner.probe = ready
-    with socket.socket() as outsider:
-        outsider.bind(('127.0.0.1', owner.port))
+def test_foreign_private_listener_is_replaced_never_adopted(owner):
+    from hermes_cpa.owner_transport import TransportError
+    from hermes_cpa.process_owner import private_directory, socket_address
+    private_directory(owner.settings.private_dir)
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as outsider:
+        with socket_address(owner.settings.private_dir, 'control.sock') as address:
+            outsider.bind(address)
         outsider.listen()
-        assert not owner.start_child()
-        assert owner.sanitized_reason == 'port_in_use'
-        assert owner.child_process is None
-        assert outsider.getsockname()[1] == owner.port
+        outsider.settimeout(.2)
+        owner.probe = ready
+        assert owner.start_child()
+        # The stale path was the lock holder's to remove; nothing reaches the outsider.
+        with pytest.raises(TransportError) as refused:
+            owner.control.request('GET', '/v8/management/config', timeout=.5)
+        assert refused.value.code == 'UNAVAILABLE'
+        with pytest.raises(socket.timeout):
+            outsider.accept()
+
+
+def test_unsafe_private_socket_path_refuses_launch(owner, tmp_path):
+    from hermes_cpa.process_owner import private_directory
+    private_directory(owner.settings.private_dir)
+    owner.settings.control_socket_path.symlink_to(tmp_path / 'elsewhere')
+    owner.probe = ready
+    assert not owner.start_child()
+    assert owner.sanitized_reason == 'launch_failed'
+    assert owner.child_process is None
 
 
 def test_external_default_never_mutates_or_launches(tmp_path):

@@ -106,7 +106,7 @@ def atomic_json(path, value):
 
 
 @contextmanager
-def socket_address(run_dir):
+def socket_address(run_dir, name='supervisor.sock'):
     """Linux pathname sockets via an open directory handle avoid sun_path limits.
 
     Both ends resolve their own fd to the same private inode. No global /tmp
@@ -117,7 +117,7 @@ def socket_address(run_dir):
         st = os.fstat(fd)
         if st.st_uid != os.getuid() or st.st_mode & 0o077:
             raise RuntimeError('unsafe_directory')
-        yield f'/proc/self/fd/{fd}/supervisor.sock'
+        yield f'/proc/self/fd/{fd}/{name}'
     finally:
         os.close(fd)
 
@@ -128,24 +128,6 @@ def peer_pid(conn):
     if uid != os.getuid():
         raise RuntimeError('unowned_peer')
     return pid
-
-
-def owns_loopback_listener(pid, port):
-    """Require the expected literal loopback listening inode in the owned PID."""
-    try:
-        inodes = set()
-        for fd in Path(f'/proc/{pid}/fd').iterdir():
-            target = os.readlink(fd)
-            if target.startswith('socket:['):
-                inodes.add(target[8:-1])
-        expected = f'0100007F:{port:04X}'
-        for line in Path(f'/proc/{pid}/net/tcp').read_text().splitlines()[1:]:
-            fields = line.split()
-            if fields[1] == expected and fields[3] == '0A' and fields[9] in inodes:
-                return True
-    except (OSError, IndexError):
-        pass
-    return False
 
 
 def signal_owned(child, identity, sig):

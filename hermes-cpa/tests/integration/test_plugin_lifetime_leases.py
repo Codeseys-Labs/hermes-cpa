@@ -1,6 +1,5 @@
 """Plugin-lifetime ownership follows registration leases; generated harmless child only."""
 import os
-import socket
 import sys
 import threading
 import time
@@ -34,10 +33,7 @@ def make_owner(tmp_path):
         package.mkdir(exist_ok=True)
         (package / 'plugin.yaml').write_text('name: hermes-cpa\n')
         (settings.home / 'config.yaml').write_text(MANAGED)
-        with socket.socket() as sock:
-            sock.bind(('127.0.0.1', 0))
-            port = sock.getsockname()[1]
-        owner = CpaSupervisor(settings, mode='managed', port=port,
+        owner = CpaSupervisor(settings, mode='managed',
             probe=lambda timeout: SimpleNamespace(management_ready=True, compatible=True,
                                                  inference_configured=False),
             policy=InstallPolicy(settings.home, package), command=[sys.executable, '-c', child],

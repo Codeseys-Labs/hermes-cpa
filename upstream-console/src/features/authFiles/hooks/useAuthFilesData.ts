@@ -291,21 +291,41 @@ export function useAuthFilesData(options?: UseAuthFilesDataOptions): UseAuthFile
       try {
         const result = await authFilesApi.uploadFiles(validFiles);
         const successCount = result.uploaded;
+        // A hosted upload stops at the first operation whose outcome is unknown: those names
+        // are never retried here, and later names were not attempted.
+        const uncertain = result.uncertain ?? [];
+        const notAttempted = result.notAttempted ?? [];
+        const incomplete = result.failed.length + uncertain.length + notAttempted.length > 0;
 
         if (successCount > 0) {
           const suffix = validFiles.length > 1 ? ` (${successCount}/${validFiles.length})` : '';
           showNotification(
             `${t('auth_files.upload_success')}${suffix}`,
-            result.failed.length ? 'warning' : 'success'
+            incomplete ? 'warning' : 'success'
           );
           notifyAuthFilesChanged();
           onFilesMutatedRef.current?.(result.files.length > 0 ? result.files : undefined);
+          await loadFiles({ background: true });
+        } else if (uncertain.length > 0) {
+          // Reconcile by reading the list; an uncertain upload may have landed.
           await loadFiles({ background: true });
         }
 
         if (result.failed.length > 0) {
           const details = result.failed.map((item) => `${item.name}: ${item.error}`).join('; ');
           showNotification(`${t('notification.upload_failed')}: ${details}`, 'error');
+        }
+        if (uncertain.length > 0) {
+          showNotification(
+            t('auth_files.upload_outcome_unknown', { files: uncertain.join(', ') }),
+            'warning'
+          );
+        }
+        if (notAttempted.length > 0) {
+          showNotification(
+            t('auth_files.upload_not_attempted', { files: notAttempted.join(', ') }),
+            'warning'
+          );
         }
       } catch (err: unknown) {
         const errorMessage = err instanceof Error ? err.message : 'Unknown error';
@@ -505,7 +525,7 @@ export function useAuthFilesData(options?: UseAuthFilesDataOptions): UseAuthFile
     async (name: string) => {
       try {
         const blob = await authFilesApi.download(name);
-        downloadBlob({ filename: name, blob });
+        await downloadBlob({ filename: name, blob });
         showNotification(t('auth_files.download_success'), 'success');
       } catch (err: unknown) {
         const errorMessage = err instanceof Error ? err.message : '';
@@ -876,7 +896,7 @@ export function useAuthFilesData(options?: UseAuthFilesDataOptions): UseAuthFile
       for (const name of uniqueNames) {
         try {
           const blob = await authFilesApi.download(name);
-          downloadBlob({ filename: name, blob });
+          await downloadBlob({ filename: name, blob });
           successCount++;
         } catch {
           failCount++;

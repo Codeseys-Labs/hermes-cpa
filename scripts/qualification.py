@@ -28,12 +28,14 @@ import sys
 import tempfile
 import time
 
+from cpa_runtime_common import load_runtime_manifest_module
+
 ROOT = Path(__file__).resolve().parents[1]
 PROVENANCE = ROOT / 'host-integration/provenance.json'
 PATCH = ROOT / 'host-integration/patches/0001-scoped-cpa-host-contract.patch'
 BASE = '0ed432d1871a9a9b169f5a778f6f9444fc13e0c1'
-ARCHIVE_SHA = 'a40164e25a60869df2c489702383d4e64dc27bb08eaafd7b04a101a2f5cfc625'
-ARCHIVE_NAME = 'CLIProxyAPI_8.0.21_linux_amd64.tar.gz'
+RUNTIME = load_runtime_manifest_module()
+ARCHIVE_NAME = RUNTIME.ARCHIVE_NAME
 MARKER = '.qualification.json'
 TOKEN = 'session-token'
 PERMIT = 'candidate-permit.json'
@@ -245,6 +247,16 @@ def package_path(root):
     return root / '.hermes/plugins/hermes-cpa'
 
 
+def runtime_artifact(package):
+    try:
+        manifest = RUNTIME.parse_runtime_manifest(read_file(package / 'cpa-runtime.json', limit=65536))
+    except ValueError:
+        raise Refused('invalid_runtime_manifest') from None
+    if manifest.artifact is None:
+        raise Refused('runtime_unpinned')
+    return manifest.artifact
+
+
 def candidate(package):
     manifest = json.loads(read_file(package / 'compatibility.json', limit=65536))
     if (not isinstance(manifest, dict) or
@@ -257,7 +269,10 @@ def candidate(package):
         raise Refused('invalid_manifest')
     pair = next((p for p in pairs if p.get('cpa_version') == '8.0.21' and
                  p.get('console_version') == '1.25.6' and p.get('platform') == 'linux_amd64'), None)
-    if pair is None or pair.get('archive_sha256') != ARCHIVE_SHA:
+    artifact = runtime_artifact(package)
+    if (pair is None or pair.get('integration') != RUNTIME.INTEGRATION or
+            pair.get('archive_sha256') != artifact.archive_sha256 or
+            pair.get('binary_sha256') != artifact.binary_sha256):
         raise Refused('unsupported_pair')
     asset = read_file(package / 'assets/cpamc.html', limit=8 * 1024 * 1024)
     metadata = json.loads(read_file(package / 'assets/cpamc.manifest.json', limit=1024 * 1024))
@@ -362,10 +377,12 @@ def root_lock(root):
         os.close(fd)
 
 
-def prepare(args):
+def prepare(args, *, session_token=None):
     root = linux_root(args.root)
     if root.exists():
         raise Refused('existing_root_refused')
+    if session_token is not None and not re.fullmatch(rb'[a-f0-9]{64}\n?', session_token):
+        raise Refused('invalid_session_token')
     parent = checked_path(root.parent)
     info = parent.stat()
     if info.st_uid != os.getuid() and not info.st_mode & stat.S_ISVTX:
@@ -376,7 +393,8 @@ def prepare(args):
     candidate(source)
     list(package_files(source))
     archive = read_file(args.archive)
-    if digest(archive) != ARCHIVE_SHA:
+    artifact = runtime_artifact(source)
+    if len(archive) != artifact.archive_size or digest(archive) != artifact.archive_sha256:
         raise Refused('archive_mismatch')
     root.mkdir(mode=0o700)
     # A failed prepare deliberately leaves an unmarked root. Never delete or
@@ -387,7 +405,8 @@ def prepare(args):
     tree_sha = copy_package(source, package_path(root))
     atomic_file(home / 'config.yaml', b'plugins:\n  isolation: host\n  enabled: [hermes-cpa]\n'
                 b'  entries:\n    hermes-cpa:\n      settings: {mode: external}\n')
-    atomic_file(root / TOKEN, (secrets.token_hex(32) + '\n').encode())
+    token = session_token.strip() if session_token is not None else secrets.token_hex(32).encode()
+    atomic_file(root / TOKEN, token + b'\n')
     atomic_file(root / ARCHIVE_NAME, archive)
     atomic_file(root / '.qualification.lock', b'')
     record = dict(version=1, purpose='hermes-cpa-qualification', root=str(root),
@@ -775,6 +794,9 @@ def main(argv=None):
             command.add_argument('--source', type=Path, default=ROOT / 'hermes-cpa')
         if name in ('prepare', 'serve'):
             command.add_argument('--archive', type=Path, default=ROOT / 'cache' / ARCHIVE_NAME)
+        if name == 'prepare':
+            command.add_argument('--session-token-stdin', action='store_true',
+                                 help='Preserve an existing generated token from stdin in a new root; never print it')
         if name in ('serve', 'cpa', 'quiesce'):
             command.add_argument('--host', type=Path, default=ROOT / 'host')
         if name in ('serve', 'smoke'):
@@ -798,7 +820,10 @@ def main(argv=None):
                 'serve': serve, 'refresh': refresh, 'cpa': run_cpa,
                 'quiesce': quiesce, 'smoke': smoke}
     try:
-        result = handlers[args.command](args)
+        if args.command == 'prepare' and args.session_token_stdin:
+            result = prepare(args, session_token=sys.stdin.buffer.read(129))
+        else:
+            result = handlers[args.command](args)
     except (Refused, OSError, ValueError, KeyError, TypeError, IndexError,
             http.client.HTTPException, subprocess.SubprocessError) as exc:
         # Library errors can contain paths, response bodies or subprocess data.

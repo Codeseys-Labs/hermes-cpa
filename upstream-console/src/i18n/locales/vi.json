@@ -91,10 +91,17 @@
   },
   "header": {
     "refresh_all": "Làm mới tất cả",
-    "logout": "Đăng xuất"
+    "logout": "Đăng xuất",
+    "lock_console": "Khóa bảng điều khiển"
   },
   "connection": {
     "status": "Trạng thái kết nối:"
+  },
+  "hosted": {
+    "locked_title": "Bảng điều khiển đã bị khóa",
+    "locked_desc": "Phiên bảng điều khiển này đã kết thúc. Hãy mở khóa lại từ dashboard Hermes để tiếp tục.",
+    "unavailable_title": "Bảng điều khiển không khả dụng",
+    "unavailable_desc": "Máy chủ không cung cấp phiên quản lý đã mở khóa. Hãy mở khóa bảng điều khiển từ dashboard Hermes rồi tải lại."
   },
   "nav": {
     "dashboard": "Bảng điều khiển",
@@ -253,6 +260,8 @@
     "upload_error_json": "Chỉ chấp nhận file JSON",
     "upload_error_size": "Kích thước file không được vượt quá {{maxSize}}",
     "upload_success": "Tải file lên thành công",
+    "upload_outcome_unknown": "Không rõ kết quả tải lên của: {{files}}. Hệ thống không tự thử lại; hãy kiểm tra danh sách credential trước khi tải lên lần nữa.",
+    "upload_not_attempted": "Chưa tải lên: {{files}}.",
     "download_success": "Tải file xuống thành công",
     "delete_success": "Xóa file thành công",
     "delete_all_success": "Đã xóa thành công",
@@ -1711,7 +1720,10 @@
     "not_found": "Không tìm thấy trang plugin",
     "not_found_desc": "Trang plugin này không được khai báo trong danh sách plugin backend hiện tại.",
     "empty_src": "URL trang plugin trống",
-    "empty_src_desc": "Menu plugin này không cung cấp URL trang nhúng được."
+    "empty_src_desc": "Menu plugin này không cung cấp URL trang nhúng được.",
+    "host_open": "Mở trang plugin",
+    "host_open_failed": "Không thể mở trang plugin",
+    "host_presentation_desc": "{{plugin}} chạy trong cửa sổ máy chủ riêng, không có quyền truy cập vào bảng điều khiển này, phiên của nó hoặc Hermes."
   },
   "system_info": {
     "title": "Thông tin Trung tâm Quản lý",
@@ -1739,7 +1751,12 @@
     "clear_login_title": "Dữ liệu đăng nhập cục bộ",
     "clear_login_desc": "Xóa dữ liệu đăng nhập đã lưu cục bộ và đăng xuất.",
     "clear_login_button": "Xóa dữ liệu đăng nhập",
-    "clear_login_confirm": "Xóa dữ liệu đăng nhập cục bộ và đăng xuất ngay?"
+    "clear_login_confirm": "Xóa dữ liệu đăng nhập cục bộ và đăng xuất ngay?",
+    "lock_console_title": "Phiên bảng điều khiển",
+    "lock_console_desc": "Khóa bảng điều khiển này. Mở khóa lại từ dashboard Hermes.",
+    "lock_console_confirm": "Khóa bảng điều khiển ngay? Các thao tác đang chờ chưa được chấp nhận sẽ bị hủy.",
+    "lock_console_button": "Khóa bảng điều khiển",
+    "hosted_connection": "CPA do Hermes quản lý"
   },
   "notification": {
     "request_log_updated": "Đã cập nhật cài đặt ghi log yêu cầu",
@@ -1756,6 +1773,7 @@
     "commercial_mode_restart_required": "Đã đổi cài đặt chế độ thương mại. Vui lòng khởi động lại dịch vụ để có hiệu lực",
     "copy_failed": "Sao chép thất bại",
     "link_copied": "Đã sao chép liên kết vào clipboard",
+    "open_link_failed": "Không thể mở liên kết",
     "trusted_proxies_restart_required": "Đã lưu cài đặt proxy đáng tin cậy. Hãy khởi động lại backend để áp dụng.",
     "region_label": "Thông báo",
     "type_success": "Thành công",

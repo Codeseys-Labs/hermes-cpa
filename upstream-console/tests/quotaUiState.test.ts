@@ -6,16 +6,17 @@
  * whole-object write would make changing a tab silently reset the sort.
  */
 
-import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { readQuotaUiState, writeQuotaUiState } from '@/features/quota/uiState';
 
 const KEY = 'quotaPage.uiState';
 
-/** Test files share one process — leaving a fake `window` behind would leak. */
-const originalWindow = (globalThis as { window?: unknown }).window;
+/** Test files share one process — leaving fake globals behind would leak. */
+const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage');
+const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
 
 /** bun's global has no sessionStorage; a Map-backed stub is enough here. */
-function installSessionStorage() {
+function installSessionStorage(): Storage {
   const store = new Map<string, string>();
   const storage = {
     getItem: (key: string) => store.get(key) ?? null,
@@ -27,22 +28,24 @@ function installSessionStorage() {
       return store.size;
     },
   };
-  (globalThis as unknown as { window: unknown }).window = { sessionStorage: storage };
+  Object.defineProperty(globalThis, 'sessionStorage', { configurable: true, value: storage });
   return storage;
 }
 
-let storage: ReturnType<typeof installSessionStorage>;
+let storage: Storage;
 
 beforeEach(() => {
   storage = installSessionStorage();
 });
 
+afterEach(() => {
+  Reflect.deleteProperty(globalThis, 'document');
+});
+
 afterAll(() => {
-  if (originalWindow === undefined) {
-    delete (globalThis as { window?: unknown }).window;
-  } else {
-    (globalThis as { window?: unknown }).window = originalWindow;
-  }
+  if (originalStorage) Object.defineProperty(globalThis, 'sessionStorage', originalStorage);
+  else Reflect.deleteProperty(globalThis, 'sessionStorage');
+  if (originalDocument) Object.defineProperty(globalThis, 'document', originalDocument);
 });
 
 describe('quota ui state', () => {
@@ -76,5 +79,22 @@ describe('quota ui state', () => {
 
     storage.setItem(KEY, '"a string"');
     expect(readQuotaUiState()).toBeNull();
+  });
+
+  test('a hosted document keeps preferences in memory and never touches native storage', () => {
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: { querySelector: () => ({ getAttribute: () => '3' }) },
+    });
+    Object.defineProperty(globalThis, 'sessionStorage', {
+      configurable: true,
+      get() {
+        throw new DOMException('opaque origin', 'SecurityError');
+      },
+    });
+
+    writeQuotaUiState({ tab: 'claude', sortMode: 'soonest' });
+
+    expect(readQuotaUiState()).toEqual({ tab: 'claude', sortMode: 'soonest' });
   });
 });

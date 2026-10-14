@@ -27,13 +27,10 @@ import unittest
 from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/qualification.py'
+sys.path.insert(0, str(SCRIPT.parent))
 SPEC = importlib.util.spec_from_file_location('qualification', SCRIPT)
 q = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(q)
-# Runs the real CLI in a separate process with the generated fixture pin.
-WRAPPER = ('import importlib.util, sys; s = importlib.util.spec_from_file_location("q", sys.argv[1]); '
-           'q = importlib.util.module_from_spec(s); s.loader.exec_module(q); q.ARCHIVE_SHA = sys.argv[2]; '
-           'raise SystemExit(q.main(sys.argv[3:]))')
 
 
 class Exec(Exception):
@@ -149,9 +146,7 @@ class QualificationTests(unittest.TestCase):
         self.source.mkdir(mode=0o700)
         self.archive = self.base / 'archive.tar.gz'
         self.archive.write_bytes(b'generated archive fixture, never an executable')
-        self.pin = patch.object(q, 'ARCHIVE_SHA', q.digest(self.archive.read_bytes()))
-        self.pin.start()
-        self.addCleanup(self.pin.stop)
+        self.archive_sha = q.digest(self.archive.read_bytes())
         self.root = self.base / 'qualification'
         self.make_package(self.source)
 
@@ -169,10 +164,22 @@ class QualificationTests(unittest.TestCase):
             dict(sha256=html_sha, version='1.25.6', cpa_version='8.0.21')))
         manifest = dict(candidate_status='unaccepted; generated fixture', adr_status='Proposed',
                         tested_minimum_hermes=None, supported_pairs=[dict(cpa_version='8.0.21',
-                        console_version='1.25.6', platform='linux_amd64', archive_sha256=q.ARCHIVE_SHA,
+                        console_version='1.25.6', platform='linux_amd64',
+                        integration=q.RUNTIME.INTEGRATION, archive_sha256=self.archive_sha,
+                        binary_sha256=q.digest(b'generated executable identity'),
                         console_sha256=html_sha)], notice_sha256={name: q.digest(content[name])
                         for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md')})
         (target / 'compatibility.json').write_text(json.dumps(manifest))
+        runtime = q.RUNTIME.unbuilt_manifest()
+        runtime['source'].update(patch_sha256=q.digest(b'generated patch'), patch_size=15,
+                                 changed_files=1)
+        runtime['build'].update(gcc_version='generated compiler fixture', libc_version='glibc 2.36',
+                                glibc_max='2.36', reproducible=True)
+        runtime['artifact'] = dict(name=q.ARCHIVE_NAME, archive_sha256=self.archive_sha,
+                                   archive_size=self.archive.stat().st_size,
+                                   binary_sha256=q.digest(b'generated executable identity'),
+                                   binary_size=len(b'generated executable identity'))
+        (target / 'cpa-runtime.json').write_bytes(q.RUNTIME.dump_runtime_manifest(runtime))
 
     def cli(self, *arguments):
         out, err = io.StringIO(), io.StringIO()
@@ -185,6 +192,28 @@ class QualificationTests(unittest.TestCase):
         result = self.cli('prepare', '--root', root, '--source', self.source, '--archive', self.archive)
         self.assertEqual(result[0], 0, result[2])
         return root
+
+    def test_explicit_stdin_token_survives_new_root_without_disclosure(self):
+        token = secrets.token_hex(32).encode()
+        with patch.object(sys, 'stdin', io.TextIOWrapper(io.BytesIO(token + b'\n'))):
+            result = self.cli('prepare', '--root', self.root, '--source', self.source,
+                              '--archive', self.archive, '--session-token-stdin')
+        self.assertEqual(result[0], 0, result[2])
+        self.assertEqual((self.root / q.TOKEN).read_bytes(), token + b'\n')
+        self.assertEqual((self.root / q.TOKEN).stat().st_mode & 0o777, 0o600)
+        self.assertNotIn(token.decode(), result[1] + result[2])
+        self.assertFalse((self.root / q.PERMIT).exists())
+        q.load_root(self.root)
+
+    def test_invalid_stdin_token_does_not_create_root(self):
+        for token in (b'', b'a' * 63, b'a' * 65, b'g' * 64, b'a' * 64 + b'\nextra'):
+            with self.subTest(size=len(token)):
+                with patch.object(sys, 'stdin', io.TextIOWrapper(io.BytesIO(token))):
+                    result = self.cli('prepare', '--root', self.root, '--source', self.source,
+                                      '--archive', self.archive, '--session-token-stdin')
+                self.assertEqual(result[0], 1)
+                self.assertIn('invalid_session_token', result[2])
+                self.assertFalse(self.root.exists())
 
     def permit(self, hours='1'):
         return self.cli('permit', '--root', self.root, '--hours', hours)
@@ -248,6 +277,22 @@ class QualificationTests(unittest.TestCase):
         result = self.cli('prepare', '--root', self.root, '--source', self.source, '--archive', self.archive)
         self.assertEqual(result[0], 1)
         self.assertEqual(before, self.snapshot(self.root))
+
+    def test_unbuilt_runtime_refused_before_creating_root(self):
+        (self.source / 'cpa-runtime.json').write_bytes(
+            q.RUNTIME.dump_runtime_manifest(q.RUNTIME.unbuilt_manifest()))
+        result = self.cli('prepare', '--root', self.root, '--source', self.source, '--archive', self.archive)
+        self.assertIn('runtime_unpinned', result[2])
+        self.assertFalse(self.root.exists())
+
+    def test_runtime_pair_binary_disagreement_refused_before_creating_root(self):
+        path = self.source / 'compatibility.json'
+        manifest = json.loads(path.read_bytes())
+        manifest['supported_pairs'][0]['binary_sha256'] = q.digest(b'different artifact')
+        path.write_text(json.dumps(manifest))
+        result = self.cli('prepare', '--root', self.root, '--source', self.source, '--archive', self.archive)
+        self.assertIn('unsupported_pair', result[2])
+        self.assertFalse(self.root.exists())
 
     def test_wrong_archive_fails_before_creating_root(self):
         self.archive.write_bytes(b'wrong')
@@ -480,7 +525,7 @@ class QualificationTests(unittest.TestCase):
 
     def test_concurrent_smoke_processes_share_one_selection(self):
         host = self.running()
-        command = [sys.executable, '-c', WRAPPER, str(SCRIPT), q.ARCHIVE_SHA,
+        command = [sys.executable, str(SCRIPT),
                    'smoke', '--root', str(self.root), '--port', str(host.port)]
         processes = [subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                      for _ in range(4)]

@@ -1,0 +1,29 @@
+# Builds the generated native resource plugin with the exact pinned CPA runtime
+# toolchain (same base image, Go 1.26.9 release, gcc 12.2/glibc 2.36). Build with
+# the repository root as context and export the artifact stage locally:
+#
+#   docker buildx build -f qualification/native-resource-fixture/Dockerfile.fixture \
+#       --target artifact --output type=local,dest=./.verification/native-resource-fixture .
+#
+# The exported directory holds fixture-manifest.json plus one reproducibly built
+# .so per variant. It is generated output: keep it out of the repository. No network
+# is used after the pinned Go toolchain download (--checksum verified).
+FROM --platform=linux/amd64 python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 AS toolchain
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates gcc libc6-dev binutils \
+    && rm -rf /var/lib/apt/lists/*
+ADD --checksum=sha256:42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d https://go.dev/dl/go1.26.9.linux-amd64.tar.gz /tmp/go.tar.gz
+RUN mkdir -p /opt/q/.verification/toolchains/go1.26.9 \
+    && tar -xzf /tmp/go.tar.gz --strip-components=1 -C /opt/q/.verification/toolchains/go1.26.9 \
+    && rm /tmp/go.tar.gz
+ENV GOTOOLCHAIN=local GOMAXPROCS=4
+WORKDIR /opt/q
+
+FROM toolchain AS build
+COPY scripts/cpa_runtime_common.py /opt/q/scripts/cpa_runtime_common.py
+COPY hermes-cpa/src/hermes_cpa/runtime_manifest.py /opt/q/hermes-cpa/src/hermes_cpa/runtime_manifest.py
+COPY qualification/native-resource-fixture /opt/q/qualification/native-resource-fixture
+RUN python /opt/q/qualification/native-resource-fixture/build_fixture.py \
+    --go-root /opt/q/.verification/toolchains/go1.26.9 --output /opt/q/out
+
+FROM scratch AS artifact
+COPY --from=build /opt/q/out/ /

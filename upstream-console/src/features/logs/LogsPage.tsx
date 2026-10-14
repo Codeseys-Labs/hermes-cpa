@@ -115,10 +115,18 @@ export function LogsPage() {
   const autoRefreshDisabled = disableControls || showFileLoggingRequired;
   const clearDisabled = disableControls || clearingLogs || showFileLoggingRequired;
 
-  const downloadLogs = () => {
+  const downloadLogs = async () => {
     const text = logBuffer.buffer.join('\n');
-    downloadBlob({ filename: 'logs.txt', blob: new Blob([text], { type: 'text/plain' }) });
-    showNotification(t('logs.download_success'), 'success');
+    try {
+      await downloadBlob({ filename: 'logs.txt', blob: new Blob([text], { type: 'text/plain' }) });
+      showNotification(t('logs.download_success'), 'success');
+    } catch (err: unknown) {
+      const message = getErrorMessage(err);
+      showNotification(
+        `${t('notification.download_failed')}${message ? `: ${message}` : ''}`,
+        'error'
+      );
+    }
   };
 
   const loadErrorLogs = async () => {
@@ -154,7 +162,10 @@ export function LogsPage() {
     try {
       const response = await logsApi.downloadErrorLog(name);
       if (!requests.session.isCurrent(session)) return;
-      downloadBlob({ filename: name, blob: new Blob([response.data], { type: 'text/plain' }) });
+      await downloadBlob({
+        filename: name,
+        blob: new Blob([response.data], { type: 'text/plain' }),
+      });
       showNotification(t('logs.error_log_download_success'), 'success');
     } catch (err: unknown) {
       if (!requests.session.isCurrent(session)) return;
@@ -360,7 +371,7 @@ export function LogsPage() {
     try {
       const response = await logsApi.downloadRequestLogById(id);
       if (!requests.session.isCurrent(session)) return;
-      downloadBlob({
+      await downloadBlob({
         filename: `request-${id}.log`,
         blob: new Blob([response.data], { type: 'text/plain' }),
       });

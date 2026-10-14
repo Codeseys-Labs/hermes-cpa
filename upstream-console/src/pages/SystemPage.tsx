@@ -14,6 +14,8 @@ import {
 } from '@/stores';
 import { configApi, versionApi } from '@/services/api';
 import { useApiKeysForModels } from '@/hooks/useApiKeysForModels';
+import { isHosted } from '@/hosted/runtime';
+import { getUiStorage } from '@/hosted/storage';
 import { formatDateTimeValue } from '@/utils/format';
 import { classifyModels } from '@/utils/models';
 import { STORAGE_KEY_AUTH } from '@/utils/constants';
@@ -125,6 +127,7 @@ export function SystemPage() {
   };
 
   const resolveApiKeysForModels = useApiKeysForModels();
+  const hosted = isHosted();
 
   const fetchModels = async ({ forceRefresh = false }: { forceRefresh?: boolean } = {}) => {
     if (auth.connectionStatus !== 'connected') {
@@ -135,7 +138,7 @@ export function SystemPage() {
       return;
     }
 
-    if (!auth.apiBase) {
+    if (!auth.apiBase && !hosted) {
       showNotification(t('notification.connection_required'), 'warning');
       return;
     }
@@ -161,16 +164,20 @@ export function SystemPage() {
   };
 
   const handleClearLoginStorage = () => {
+    // Hosted, "clear login" has no browser login state to erase: it locks the console.
     showConfirmation({
-      title: t('system_info.clear_login_title', { defaultValue: 'Clear Login Storage' }),
-      message: t('system_info.clear_login_confirm'),
+      title: hosted
+        ? t('system_info.lock_console_title')
+        : t('system_info.clear_login_title', { defaultValue: 'Clear Login Storage' }),
+      message: hosted ? t('system_info.lock_console_confirm') : t('system_info.clear_login_confirm'),
       variant: 'danger',
       confirmText: t('common.confirm'),
       onConfirm: () => {
         auth.logout();
-        if (typeof localStorage === 'undefined') return;
+        if (hosted) return;
+        const storage = getUiStorage('local');
         const keysToRemove = [STORAGE_KEY_AUTH, 'isLoggedIn', 'apiBase', 'apiUrl', 'managementKey'];
-        keysToRemove.forEach((key) => localStorage.removeItem(key));
+        keysToRemove.forEach((key) => storage.removeItem(key));
         showNotification(t('notification.login_storage_cleared'), 'success');
       },
     });
@@ -342,7 +349,9 @@ export function SystemPage() {
             <div className={styles.infoTile}>
               <div className={styles.tileLabel}>{t('connection.status')}</div>
               <div className={styles.tileValue}>{t(`common.${auth.connectionStatus}_status`)}</div>
-              <div className={styles.tileSub}>{auth.apiBase || '-'}</div>
+              <div className={styles.tileSub}>
+                {auth.apiBase || (hosted ? t('system_info.hosted_connection') : '-')}
+              </div>
             </div>
           </div>
         </Card>
@@ -462,11 +471,13 @@ export function SystemPage() {
           )}
         </Card>
 
-        <Card title={t('system_info.clear_login_title')}>
-          <p className={styles.sectionDescription}>{t('system_info.clear_login_desc')}</p>
+        <Card title={hosted ? t('system_info.lock_console_title') : t('system_info.clear_login_title')}>
+          <p className={styles.sectionDescription}>
+            {hosted ? t('system_info.lock_console_desc') : t('system_info.clear_login_desc')}
+          </p>
           <div className={styles.clearLoginActions}>
             <Button variant="danger" onClick={handleClearLoginStorage}>
-              {t('system_info.clear_login_button')}
+              {hosted ? t('system_info.lock_console_button') : t('system_info.clear_login_button')}
             </Button>
           </div>
         </Card>

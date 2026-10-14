@@ -4,9 +4,10 @@
  */
 
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { createJSONStorage, persist } from 'zustand/middleware';
 import type { Theme } from '@/types';
 import { STORAGE_KEY_THEME } from '@/utils/constants';
+import { getUiStorage } from '@/hosted/storage';
 
 type ResolvedTheme = 'light' | 'dark';
 type AppliedTheme = ResolvedTheme | 'white';
@@ -100,6 +101,7 @@ export const useThemeStore = create<ThemeState>()(
     }),
     {
       name: STORAGE_KEY_THEME,
+      storage: createJSONStorage(() => getUiStorage('local')),
     }
   )
 );

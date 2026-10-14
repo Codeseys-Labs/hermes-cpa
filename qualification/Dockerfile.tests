@@ -11,5 +11,5 @@ COPY . /opt/q/hermes-cpa/tests
 
 USER 10001:10001
 ENV PYTHONPATH=/opt/q/hermes-cpa/src:/opt/q/host \
-    CPA_TEST_ARCHIVE=/opt/q/cache/CLIProxyAPI_8.0.21_linux_amd64.tar.gz
+    CPA_TEST_ARCHIVE=/opt/q/cache/CLIProxyAPI_8.0.21_hermes-owner-v1_linux_amd64.tar.gz
 CMD ["python", "-m", "pytest", "-q", "/opt/q/hermes-cpa/tests", "-p", "no:cacheprovider"]

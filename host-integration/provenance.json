@@ -7,9 +7,79 @@
       "after_sha256": "568fba38647159919ef34be9559352a85e189b5bd4655b5764e60757af991298"
     },
     {
+      "path": "apps/desktop/electron/external-open.test.ts",
+      "before_sha256": "c508bc82fbf2930bef4d390590dab6ad4679e199c0224f25b3a4ac052510ecae",
+      "after_sha256": "723d60b051547684d132467bcea2c1a362076a1a082cff2c0e4ca3deee5c2a89"
+    },
+    {
+      "path": "apps/desktop/electron/external-open.ts",
+      "before_sha256": "dba3725a350b98a1801c5a327631dc86b4fe8cb80b21384cf7023616c045cddd",
+      "after_sha256": "8afab4624f4bc2351be43da0088850bb5eb01d8c04448f082cd72f7fd07caa33"
+    },
+    {
       "path": "apps/desktop/electron/main.ts",
       "before_sha256": "5e75e301e93499e3e6bcede1da45ce31a4cc6de5e8dd09422f947e193e464cde",
-      "after_sha256": "751ff44c603607558d0736563da865776dedabdd42901a0f07b68a8cd732b659"
+      "after_sha256": "100c1b18ba1d79f79c0afedfc7c5892709e6027ad7d6191c37858d9e75d37279"
+    },
+    {
+      "path": "apps/desktop/electron/oauth-session-response.test.ts",
+      "before_sha256": null,
+      "after_sha256": "8194944582e043113027c336e285a78f72ffc719048f52a8bc843dc7ebbba0ef"
+    },
+    {
+      "path": "apps/desktop/electron/oauth-session-response.ts",
+      "before_sha256": "3a467730bce185e89c2cd45aad101222fb5a7eec06274e6d3dc56acb5746e11b",
+      "after_sha256": "ac5cbfc8f88acedb63f5b0fe61faabfbc11a80d0c6a45b547f7289b4cc7c31f4"
+    },
+    {
+      "path": "apps/desktop/electron/plugin-file-save-contract.ts",
+      "before_sha256": null,
+      "after_sha256": "3994939b5af563cab1595401a35c2af8355cef769787f8ea11d6b8e6de399396"
+    },
+    {
+      "path": "apps/desktop/electron/plugin-file-save-ipc.test.ts",
+      "before_sha256": null,
+      "after_sha256": "92e8f6bf38dcd44852830c708b77d4858449805356891a6aaab470a44ce3202e"
+    },
+    {
+      "path": "apps/desktop/electron/plugin-file-save-ipc.ts",
+      "before_sha256": null,
+      "after_sha256": "deee276f16818a9452462ee0fac545956f4e9988d1b8f81b7e1909b118d30e7c"
+    },
+    {
+      "path": "apps/desktop/electron/plugin-file-save.test.ts",
+      "before_sha256": null,
+      "after_sha256": "6df87f82b854592f18f1f28e77da6d11a25bd3cc1a603884c82dd1924e1407b8"
+    },
+    {
+      "path": "apps/desktop/electron/plugin-file-save.ts",
+      "before_sha256": null,
+      "after_sha256": "a8082631acaab399feee6e64f4cb41031d8b7ebb1f7c6b186257d0f2e0f0052c"
+    },
+    {
+      "path": "apps/desktop/electron/plugin-resource-contract.ts",
+      "before_sha256": null,
+      "after_sha256": "bdf1b8462fbe46f1ff18a39890dd166ef95902925de5aa74ebdaaaa724ed64d9"
+    },
+    {
+      "path": "apps/desktop/electron/plugin-resource-ipc.test.ts",
+      "before_sha256": null,
+      "after_sha256": "d4be1ebad3fc8e17a6e9685cb20686549e4b4ee9a7bf8bfe6bfc96c997f2ae44"
+    },
+    {
+      "path": "apps/desktop/electron/plugin-resource-ipc.ts",
+      "before_sha256": null,
+      "after_sha256": "91f034b988d67e6f38d1ff4e6d32f00f4cc705e9a85160db4b528542789fa385"
+    },
+    {
+      "path": "apps/desktop/electron/plugin-resource-presentation.test.ts",
+      "before_sha256": null,
+      "after_sha256": "4c0defefe36f27aedd668375bc51da652f68909d13e47990081c6aa561dd0c72"
+    },
+    {
+      "path": "apps/desktop/electron/plugin-resource-presentation.ts",
+      "before_sha256": null,
+      "after_sha256": "d81cd031aa8583a9e5940a5defa4a407d442022afbe4029d00c0e3f91b8c2c63"
     },
     {
       "path": "apps/desktop/electron/plugin-selection.node-test.ts",
@@ -22,6 +92,51 @@
       "after_sha256": "823d94dff88816956ec8907461d8f83ee559f7f00a8a51c5be3b4f47eaba1d37"
     },
     {
+      "path": "apps/desktop/electron/plugin-session-contract.ts",
+      "before_sha256": null,
+      "after_sha256": "d5ea4b3292e35ab75605172886457d34438ba63c67f38eba08e038f560124bde"
+    },
+    {
+      "path": "apps/desktop/electron/plugin-session-ipc.test.ts",
+      "before_sha256": null,
+      "after_sha256": "59441c6810aa105e0d26e68f531892249d591c2edb96e756a7a2f38fd871f2f7"
+    },
+    {
+      "path": "apps/desktop/electron/plugin-session-ipc.ts",
+      "before_sha256": null,
+      "after_sha256": "f1f90a862399e4c62312aaac7ecabcdc459110241acd76e2a3f5f26e272b33fb"
+    },
+    {
+      "path": "apps/desktop/electron/preload.ts",
+      "before_sha256": "6fc712499467844f9f411c071701e18af9779204c9d958e399d51fcd43f56c4e",
+      "after_sha256": "72c7e9547ea712bc3a4a26706409ff95441a396f70068e57b7a6efe049f48d4a"
+    },
+    {
+      "path": "apps/desktop/electron/renderer-log.test.ts",
+      "before_sha256": "55dabbcd64198e0f916094fd82e256d4f804443b7556edc467b532c135e43038",
+      "after_sha256": "ec3b49e546f52dde1ef235924b004fc65430fe19f881642322f4d26e0ecab2cf"
+    },
+    {
+      "path": "apps/desktop/electron/renderer-log.ts",
+      "before_sha256": "6ed466d6875b2daab1e4ca25e1f5c5bfcd2bb501ba7142d8bd00ea15f3e8307e",
+      "after_sha256": "1ed7609e57410424ad77e795f509aca4a63b59591a463c154e43eaf3eab9769c"
+    },
+    {
+      "path": "apps/desktop/package.json",
+      "before_sha256": "545811bd20e6c6cd38d155a8d565dca763a0439c64de9114c705e326e2a65e8b",
+      "after_sha256": "302baf8cffdb243624fdfe5bc3e52517943093b85adba6f9d08a78018bddbdb5"
+    },
+    {
+      "path": "apps/desktop/src/api/client.ts",
+      "before_sha256": "59689ef1367065744e58b56fce35ce128b40ed9afec9c381bb56e5cb16900e6b",
+      "after_sha256": "cdc194f6bd5ffc10f3277c02b814d58a3e1a17c701d9f38bf9cbcb74e51c760e"
+    },
+    {
+      "path": "apps/desktop/src/api/plugin-resource.test.ts",
+      "before_sha256": null,
+      "after_sha256": "56ae97ad3334f70f59e56d576d1875d27cede2c17dadeb1751cd3d91f8639096"
+    },
+    {
       "path": "apps/desktop/src/api/plugin-selection-session.node-test.ts",
       "before_sha256": null,
       "after_sha256": "99b5ff6c7dc3d0d1808dbd131070d4b77af7e811d06015266c339460cee163e0"
@@ -32,14 +147,54 @@
       "after_sha256": "a020a516f0e63e7cbca0690664145f66bfbe0bc05b45314bf32ea5937e977e71"
     },
     {
+      "path": "apps/desktop/src/api/plugin-session.test.ts",
+      "before_sha256": null,
+      "after_sha256": "053b8630fee2ff5a04868113288a56bf4dc5b74371e7a262bcd7d02b14618c85"
+    },
+    {
+      "path": "apps/desktop/src/api/plugin-session.ts",
+      "before_sha256": null,
+      "after_sha256": "9132131bf277e0e55ad8f0146404394267bb17765a45df30978c797d21445f8a"
+    },
+    {
       "path": "apps/desktop/src/api/plugins.ts",
       "before_sha256": "17c163a7e5122adc28c3cdac9f4c4fa189dcd5c720b062b7c89dedb834d32fb7",
-      "after_sha256": "00db482c1801304895a9774aeae57a69117eb553e7e30a16818e30ce21046044"
+      "after_sha256": "ffddb768e96348dbd5c61016b686ff72ffaa7d2e94bcac10ef010b7730833027"
+    },
+    {
+      "path": "apps/desktop/src/components/ui/sandboxed-frame-document.test.tsx",
+      "before_sha256": null,
+      "after_sha256": "a93247818c741de8fe2e6192d8769acb2a6a246c7b8016c802e037a756b97f0a"
+    },
+    {
+      "path": "apps/desktop/src/components/ui/sandboxed-frame.tsx",
+      "before_sha256": "233e489f5a86031cd1de5f62012cfdab8be8bb175c024116bd24159b50c31c3b",
+      "after_sha256": "90234dcef57e28f8cf5f741ba7bb107a3de505a2b0019cfce3e7d2055256c70a"
+    },
+    {
+      "path": "apps/desktop/src/contrib/plugin.test.ts",
+      "before_sha256": "627ed1c31b03384adc8543004e71bd05b23f49c7d13d1cecd8e0b2ba5375db1f",
+      "after_sha256": "23c1677648ffc6b1989cf4b224996bc96603a211ceaec982a683ca6551163df7"
+    },
+    {
+      "path": "apps/desktop/src/contrib/plugin.ts",
+      "before_sha256": "dfdd28559b7b65a2ec53614dc7bb40e2d7547c094e468e32b828f74db6903c6d",
+      "after_sha256": "e6081c8c28d61b07f3ac3c4b8778d84ea174bda7a26046c7806fca6ad3b54429"
     },
     {
       "path": "apps/desktop/src/global.d.ts",
       "before_sha256": "327f9906e2ace77d2e4bac4366fc863fff1cd4fad202dc66ddcf548a29d26686",
-      "after_sha256": "a83e1637bd1e3e3c1af083e8946da17db2a13d4643f565766667e7c2e33170ce"
+      "after_sha256": "8c3dc414095535e420cc3268c4fd496503708d42117cc634187b39253e2b0d90"
+    },
+    {
+      "path": "apps/desktop/src/sdk/index.ts",
+      "before_sha256": "201dbd7d844b7800a2c3a58da468bfdf83fd07fb64f005a025553f70e6f62db6",
+      "after_sha256": "5f53ce20a06d7acf0433febc8e375b60bc768f6972004ee45e2fec13b788f8e5"
+    },
+    {
+      "path": "apps/desktop/src/store/session.ts",
+      "before_sha256": "cc2173f533888033e5d8701167ba26ccee55a1d6bd39ebff366aefb37a656bfd",
+      "after_sha256": "1599325e6c46623aecf6525310b1ce6345f670fb15b70180c8e10386367e56d2"
     },
     {
       "path": "hermes_cli/config.py",
@@ -67,9 +222,19 @@
       "after_sha256": "8fc90b5de6143eff04d785f657d6c66ec84431497c44ddc1c486bd357f33032a"
     },
     {
+      "path": "hermes_cli/plugin_api_limits.py",
+      "before_sha256": null,
+      "after_sha256": "fa0e84e9f7f866ac0fd8f790eb0cf531449ca1d0468ea97aec454cbacc9988e7"
+    },
+    {
+      "path": "hermes_cli/plugin_buffered_response.py",
+      "before_sha256": null,
+      "after_sha256": "b107eda4c283b22e36cc7f1a69ba2dc7cac6c9fb1b51ba4d1dee95d47c4aa1de"
+    },
+    {
       "path": "hermes_cli/plugin_host.py",
       "before_sha256": "5495576879ed2d6be34e08de3e12c7f1de0fc830ef46e80c23cee29fb46f1f4f",
-      "after_sha256": "62b8b5ab4d11f385ef503ecaa64c3a51ed33ca0caeae510e36b9ae6657a2ee9a"
+      "after_sha256": "f6d4fb90cbf2f710423562af91f38cc3ae196ed377551d522bb21661017bb49c"
     },
     {
       "path": "hermes_cli/plugin_host_asgi.py",
@@ -79,7 +244,7 @@
     {
       "path": "hermes_cli/plugin_host_child.py",
       "before_sha256": "d97b6355c7fd6c62a48e376f1c629125186f496a116447807bc202470b923b70",
-      "after_sha256": "f5c9dacbb0fc458ea107a56fd8a5353550c0b850fb50ca3608f9b836375cb8ee"
+      "after_sha256": "673459dc917ac125bf3d356e36a908e2170cd61cb7256200be2bf45c29d99251"
     },
     {
       "path": "hermes_cli/plugin_host_cli.py",
@@ -94,7 +259,12 @@
     {
       "path": "hermes_cli/plugin_host_wire.py",
       "before_sha256": "12002da20e54d346c8f0989b5f90a9ae957dc15fb7705c57800353ca3dc1b6a0",
-      "after_sha256": "ab7f083a6291d623486f5e4ffca7be5f8456b73459ae6fb3ff869880696fcc34"
+      "after_sha256": "ba0a54aa1c65e4a5be3b8e6abeb6a2531367e21b3baaacd0c8eb6e74e177f440"
+    },
+    {
+      "path": "hermes_cli/plugin_http_admission.py",
+      "before_sha256": null,
+      "after_sha256": "f9c2f65368d7bbb2a74d75d05127c4bf74d51080c0c713c7be1064f767ed422c"
     },
     {
       "path": "hermes_cli/plugin_isolation.py",
@@ -122,6 +292,11 @@
       "after_sha256": "430a7c6be18fdd19963a415d1613fbb4cb267c8003e689460b9c32a34b0d1ecc"
     },
     {
+      "path": "hermes_cli/plugin_resource_presentation.py",
+      "before_sha256": null,
+      "after_sha256": "4aeb8fccbe35b66be871293bf806df33295f4955b2e58b7e25821108b779b2a4"
+    },
+    {
       "path": "hermes_cli/plugin_selection_authority.py",
       "before_sha256": null,
       "after_sha256": "732aa099b54e3b200ca85bc370802f404dfbbe3be41306e92453a6ed580966d6"
@@ -137,9 +312,19 @@
       "after_sha256": "f30b15e1afd0e7a818b229720c939016c85ce522d25eca0c2df2955ab69b0370"
     },
     {
+      "path": "hermes_cli/web_server.py",
+      "before_sha256": "839ee3fa8d9548c9e1875ffe1321e287eda37c3577e607dcd93288621b0403a4",
+      "after_sha256": "4ebee7525a57ec5c7591cea06ef89275dc7884c109036e00828afff3fcc52972"
+    },
+    {
       "path": "hermes_cli/web_server_dashboard.py",
       "before_sha256": "272063860496ca6a535dc998bdce73c89e72b7f17398b617eeb3cab015b96afd",
-      "after_sha256": "99e7ab8c4de25707c2cfe22aca3aceb196dc49473a502b7e9d8128c1efe21103"
+      "after_sha256": "f7bff7cc3a4d0e852688f3674708d35651fe00b4b7bb9d5ddd91b7977bef30ee"
+    },
+    {
+      "path": "package-lock.json",
+      "before_sha256": "483bff2109ab28be0b90447a72596ab8f781cb9f23c031d51be173b117ce8789",
+      "after_sha256": "86d0011118e62e1f69f09db5a37964d0ac114068fe206113c7489fcbaec23117"
     },
     {
       "path": "pm/plugin_eviction.py",
@@ -152,6 +337,11 @@
       "after_sha256": "367d5465e29ae856ddc6a8feb4ea297110266c910f3747366cd9cb4a7dd9173d"
     },
     {
+      "path": "tests/hermes_cli/plugin_selection_network.mts",
+      "before_sha256": null,
+      "after_sha256": "561c2a14fa09878d84edceab0595ff20a41ea18267c4f12c07ed2c523a63b71f"
+    },
+    {
       "path": "tests/hermes_cli/test_coalesce_session_args.py",
       "before_sha256": "f902f3d74902abbeca9fdc14936599498ac1b31e40c525af24d4225337fd5783",
       "after_sha256": "a8b6af081dfcac59b7a4915fc14044ce69d7425b7a000dcbc80d47aeff54c0ab"
@@ -162,9 +352,19 @@
       "after_sha256": "b866d33e6e12c05d38ac24a84d702670c6bf3f33c808cf91075b4aec448e135d"
     },
     {
+      "path": "tests/hermes_cli/test_plugin_api_limits.py",
+      "before_sha256": null,
+      "after_sha256": "fc41342ef85e09d60e9e75de9d40cb7c3c5eaa3aaaa8abff78632c61836f7777"
+    },
+    {
       "path": "tests/hermes_cli/test_plugin_asgi_lifecycle.py",
       "before_sha256": null,
       "after_sha256": "7f8ca38bf43dcf02724af0f3c4042c935f7c3439c91c72ee0b78dacbafb19d7f"
+    },
+    {
+      "path": "tests/hermes_cli/test_plugin_buffered_response.py",
+      "before_sha256": null,
+      "after_sha256": "7fa7786b77e9e823bb892bd4c1408cd3799504efbb15aaa4ab19f4373cec5f33"
     },
     {
       "path": "tests/hermes_cli/test_plugin_host_bounds.py",
@@ -175,6 +375,11 @@
       "path": "tests/hermes_cli/test_plugin_host_containment.py",
       "before_sha256": null,
       "after_sha256": "798c17d4813079783230bfff6bbad776fb3d8186c288394e03ae9acdc397daf7"
+    },
+    {
+      "path": "tests/hermes_cli/test_plugin_host_large_frames.py",
+      "before_sha256": null,
+      "after_sha256": "bf1c1866dcd5765b1e295bacc52f9a9b97c54f9e03ddb3b1d5f3bf55aa28e975"
     },
     {
       "path": "tests/hermes_cli/test_plugin_host_request_context.py",
@@ -212,6 +417,11 @@
       "after_sha256": "c7f4c48ca9c0e1df3bf56febaf26a1ae5c545139cf25b429220de278ec08f8bf"
     },
     {
+      "path": "tests/hermes_cli/test_plugin_resource_presentation.py",
+      "before_sha256": null,
+      "after_sha256": "5a2f489d802a450df302863fcaf0b230d968e2e807177fd46117d907dd4a3570"
+    },
+    {
       "path": "tests/hermes_cli/test_plugin_selection_authority.py",
       "before_sha256": null,
       "after_sha256": "f918ceaca46618e179859bdd143a6653d3f456b7bb07afd5cfc6f1ad4ba8bc38"
@@ -230,8 +440,38 @@
       "path": "tools/delegate_tool_config.py",
       "before_sha256": "0c56c92967ace80ba94347383dd0d922e67e42bd58d1505ca36bcdb812658ad1",
       "after_sha256": "686ed26204ea07385c99323e009df319eb189e7121a5accf4d1495383bd5d426"
+    },
+    {
+      "path": "web/src/plugins/PluginPage.test.tsx",
+      "before_sha256": null,
+      "after_sha256": "6b07041f5f0d1841f0e7b630c61b02cb459a11f77a09f7c574f6a69f89d74e25"
+    },
+    {
+      "path": "web/src/plugins/PluginPage.tsx",
+      "before_sha256": "e6cd2271067a519a3ab6b2715254d48b9ac8da078035d01b6f66ab18389df7c1",
+      "after_sha256": "01e1a1c85fe052c39dac43ca33df048a901269cc1fb06ce781aabb6def3ddd2f"
+    },
+    {
+      "path": "web/src/plugins/registry.ts",
+      "before_sha256": "f37ca0ab497efe1c8588f32afe677865b999c19393d71002ecfc004d30a7f990",
+      "after_sha256": "415c43bf6280ae541e7c190db8cd94c358b1284a4b11a0c535494a2300e8f50f"
+    },
+    {
+      "path": "web/src/plugins/sdk.d.ts",
+      "before_sha256": "092b483dc1000d2de504b46d93faba88b2ea45d87a75a74265b41846a99c7417",
+      "after_sha256": "9a0a82ad5d4c70e6c7c845364c067b4dd7f7cccdaa7b00b9790076ef987ddd50"
+    },
+    {
+      "path": "web/src/plugins/session.test.ts",
+      "before_sha256": null,
+      "after_sha256": "f94d550cef975e815280da7e81d0a56fd22931e4ac80f6ef9ef50b1b47964851"
+    },
+    {
+      "path": "web/src/plugins/session.ts",
+      "before_sha256": null,
+      "after_sha256": "627ca27411119eb19357e406f333ac72801bd963dca0627a49da0df2105abb53"
     }
   ],
   "host_contract_version": 1,
-  "patch_sha256": "ff0d2190fbf4eb1a63c17f884f8476086ade6363c0c7ed563ffaf69000966044"
+  "patch_sha256": "7438af45662f7888d4c34cb49c9149e9e5f5b34c555513c2234344ca14122f18"
 }

@@ -1,6 +1,7 @@
 import { apiClient } from './client';
 import { getConfigValue, guardConfigConnection } from './configValue';
 import { isRecord } from '@/utils/helpers';
+import { configRevisionArgs, inheritConfigRevision } from './configRevision';
 import {
   isManagementOAuthProviderKey,
   normalizeManagementOAuthProviderKey,
@@ -271,7 +272,9 @@ export const pluginsApi = {
 
   async getConfig(id: string): Promise<PluginConfigObject> {
     const data = await getConfigValue(`/config/plugins/configs/${encodeURIComponent(id)}`, {});
-    return normalizePluginConfig(data);
+    const normalized = normalizePluginConfig(data);
+    inheritConfigRevision(data, normalized);
+    return normalized;
   },
 
   async patchConfig(id: string, changes: PluginConfigObject) {
@@ -280,13 +283,15 @@ export const pluginsApi = {
     // recursively merge objects, so merge touched fields into the latest object
     // and replace only this plugin instance (never the complete config tree).
     const assertConnection = guardConfigConnection();
-    const next = { ...(await pluginsApi.getConfig(id)) };
+    const snapshot = await pluginsApi.getConfig(id);
+    const next = { ...snapshot };
     assertConnection();
     for (const [key, value] of Object.entries(changes)) {
       if (value === null) delete next[key];
       else next[key] = value;
     }
-    return apiClient.put(`/config/plugins/configs/${encodeURIComponent(id)}`, next);
+    return apiClient.put(`/config/plugins/configs/${encodeURIComponent(id)}`, next,
+      ...configRevisionArgs(snapshot));
   },
 };
 

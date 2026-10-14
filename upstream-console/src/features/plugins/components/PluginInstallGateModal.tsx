@@ -13,6 +13,7 @@ import {
   isDefaultPluginStoreSource,
   resolvePluginAssetURL,
 } from '../pluginResources';
+import { usePluginAssetSrc } from '../pluginAssets';
 import styles from './PluginInstallGateModal.module.scss';
 
 interface PluginInstallGateModalProps {
@@ -26,8 +27,9 @@ interface PluginInstallGateModalProps {
 
 function GateLogo({ src }: { src: string }) {
   const [failed, setFailed] = useState(false);
-  return src && !failed ? (
-    <img src={src} alt="" onError={() => setFailed(true)} />
+  const displaySrc = usePluginAssetSrc(src);
+  return displaySrc && !failed ? (
+    <img src={displaySrc} alt="" onError={() => setFailed(true)} />
   ) : (
     <IconPlug size={26} />
   );

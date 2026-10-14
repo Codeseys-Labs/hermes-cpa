@@ -1,0 +1,4 @@
+:root { --fixture-css: loaded; }
+body { font-family: sans-serif; margin: 1rem; }
+#probe-css { color: rgb(10, 20, 30); background-image: url("logo.png"); background-repeat: no-repeat; padding-left: 20px; }
+#checks li[data-result="LEAK"], #checks li[data-result="fail"] { color: rgb(180, 0, 0); }

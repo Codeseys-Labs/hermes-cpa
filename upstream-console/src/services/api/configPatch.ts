@@ -1,5 +1,7 @@
 import { isMap as isYamlMap, parseDocument } from 'yaml';
 import { apiClient } from './client';
+import { isHosted } from '@/hosted/runtime';
+import { submitConfigTransaction, toManagementRequest } from './hostedAdapter';
 
 export interface ConfigPatchPlan {
   patch: Record<string, unknown>;
@@ -238,7 +240,8 @@ export function hasConfigPatchChanges(plan: ConfigPatchPlan): boolean {
 
 export async function applyConfigPatch(
   plan: ConfigPatchPlan,
-  connectionRevision: number
+  connectionRevision: number,
+  expectedRevision?: string
 ): Promise<void> {
   const checkConnection = () => {
     if (apiClient.getConnectionRevision() !== connectionRevision) {
@@ -249,6 +252,26 @@ export async function applyConfigPatch(
   const urls = plan.deletions.map(fieldUrl);
   const emptyMapUrls = (plan.emptyMaps ?? []).map(fieldUrl);
   checkConnection();
+  if (!hasConfigPatchChanges(plan)) return;
+  if (isHosted()) {
+    const revision = expectedRevision;
+    if (!revision) throw new Error('Read the configuration before saving; its revision is required');
+    const writes = [
+      ...(Object.keys(plan.patch).length
+        ? [{ method: 'PATCH', url: '/config', data: plan.patch }]
+        : []),
+      ...emptyMapUrls.map((url) => ({ method: 'PUT', url, data: {} })),
+      ...urls.map((url) => ({ method: 'DELETE', url })),
+    ];
+    const requests = await Promise.all(writes.map((write) => toManagementRequest(write, revision)));
+    checkConnection();
+    try {
+      await submitConfigTransaction(requests, revision);
+    } finally {
+      checkConnection();
+    }
+    return;
+  }
   if (Object.keys(plan.patch).length) {
     try {
       await apiClient.patch('/config', plan.patch);

@@ -3,10 +3,12 @@
 Called by a trusted native backend, never by the untrusted console. Every refusal
 that needs no write runs first: consent, supported host, dependencies, package
 resources, release gate, profile policy, port availability, then the pinned
-archive and executable digests. Only then are the separate management and
-inference keys written. Mode is published last; a partial preparation stays
-external and stopped. A second attempt refuses existing config/keys instead of
-rotating them.
+runtime archive and executable digests. Only then are the executable and the CPA
+config written. The config carries a freshly generated, user-managed public access
+key and leaves public management disabled; no private CPA key is created anywhere
+(the owner and broker use private owner-only channels). Mode is published last; a
+partial preparation stays external and stopped. A second attempt refuses existing
+config/keys instead of rotating them.
 """
 import argparse
 import fcntl
@@ -17,17 +19,22 @@ import socket
 import uuid
 from pathlib import Path
 
+from .candidate_download import AcquisitionError
 from .config_store import ConfigStore
 from .controller import CpaController, controller_from_profile, is_default_home
-from .installer import CpaInstaller, MAX_ARCHIVE, bounded_file, download_pinned_archive
+from .installer import CpaInstaller, MAX_ARCHIVE, UnsupportedLibc, bounded_file
 from .process_owner import private_directory, private_open, require_platform
-from .settings import MANAGEMENT_SECRET_ENV, INFERENCE_SECRET_ENV
 
 DEPENDENCIES = ('bcrypt', 'ruamel.yaml', 'httpx', 'psutil', 'pydantic')
 # The unified Git directory install carries these; a wheel does not.
-PACKAGE_RESOURCES = ('plugin.yaml', 'compatibility.json', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
-                     'assets/cpamc.html', 'assets/cpamc.manifest.json')
+PACKAGE_RESOURCES = ('plugin.yaml', 'compatibility.json', 'cpa-runtime.json', 'LICENSE',
+                     'THIRD_PARTY_NOTICES.md', 'assets/cpamc.html', 'assets/cpamc.manifest.json')
 UNCHANGED = ' Nothing was changed.'
+# Pre-integration setups stored private broker keys under these names. Their
+# presence makes setup refuse; setup never reuses, rotates or deletes them.
+LEGACY_PRIVATE_KEY_ENVS = ('HERMES_CPA_MANAGEMENT_KEY', 'HERMES_CPA_INFERENCE_KEY')
+ARCHIVE_HINT = ('Pass --archive PATH to a hermes-owner-v1 runtime archive built with '
+                'scripts/build_cpa_runtime.py.')
 
 
 class SetupRefused(ValueError):
@@ -47,8 +54,36 @@ def _release_refusal(exc):
                             'to another home, package or manifest.' + UNCHANGED)
     if code == 'unsupported_platform':
         return SetupRefused(code, 'Managed CPA requires Linux x86_64.' + UNCHANGED)
+    if code == 'runtime_unpinned':
+        return SetupRefused(code, 'This package has no hermes-owner-v1 CPA runtime pinned yet, and the '
+                            'stock CPA release is never used instead. Build and pin it with '
+                            'scripts/build_cpa_runtime.py, then reinstall the package.' + UNCHANGED)
+    if isinstance(exc, UnsupportedLibc):
+        found = 'glibc ' + '.'.join(map(str, exc.found)) if exc.found else 'a non-glibc C library'
+        return SetupRefused(code, 'The pinned CPA runtime needs glibc ' +
+                            '.'.join(map(str, exc.required)) + f' or newer; this host has {found}.' +
+                            UNCHANGED)
     return SetupRefused('package_verification_failed', f'Packaged release metadata failed '
                         f'verification ({code}); reinstall the plugin.' + UNCHANGED)
+
+
+def _acquisition_refusal(exc):
+    code = str(exc)
+    messages = {
+        'gh_unavailable': 'The GitHub CLI (gh) was not found on PATH. Install gh and run '
+                          '`gh auth login` with an account that can read baladithyab/hermes-cpa. ',
+        'gh_unauthenticated': 'gh could not confirm authentication for github.com (not logged in, '
+                              'expired token or no network). Run `gh auth login` with an account '
+                              'that can read baladithyab/hermes-cpa. ',
+        'candidate_unavailable': 'The pinned private candidate runtime asset could not be downloaded '
+                                 'from baladithyab/hermes-cpa (not published yet, no read access for '
+                                 'the gh account, or network failure). ',
+        'candidate_mismatch': 'The downloaded candidate asset did not match the pinned size and '
+                              'sha256 and was discarded. ',
+    }
+    return SetupRefused(code if code in messages else 'download_failed',
+                        messages.get(code, 'The candidate runtime download failed. ') +
+                        ARCHIVE_HINT + UNCHANGED)
 
 
 def _require_dependencies():
@@ -101,9 +136,11 @@ def _profile_state(settings):
                            'status/start. Setup never rotates credentials.' + UNCHANGED)
     existing = build_profile_secret_scope(settings.home)
     if (settings.config_path.exists() or settings.config_path.is_symlink() or
-            existing.get(MANAGEMENT_SECRET_ENV) or existing.get(INFERENCE_SECRET_ENV)):
-        raise SetupRefused('recovery_required', 'Existing CPA config or CPA keys were found; setup '
-                           'refuses to overwrite or rotate them. Run hermes cpa doctor.' + UNCHANGED)
+            any(existing.get(name) for name in LEGACY_PRIVATE_KEY_ENVS)):
+        raise SetupRefused('recovery_required', 'Existing CPA config or legacy private CPA key entries '
+                           'were found; setup never overwrites, rotates, reuses or deletes them. '
+                           'Moving an existing profile to this runtime is an explicit, separately '
+                           'verified transition. Run hermes cpa doctor.' + UNCHANGED)
     return cfg
 
 
@@ -130,7 +167,8 @@ def preflight(settings, package_root, archive=None, *, consent=False, port=8318,
                            + UNCHANGED)
     if (archive is None) == (download is not True):
         raise SetupRefused('archive_source', 'Choose exactly one source: --archive with a local '
-                           'pinned release or --download for the fixed upstream URL.' + UNCHANGED)
+                           'hermes-owner-v1 runtime or --download for the fixed private candidate '
+                           'asset (authenticated gh).' + UNCHANGED)
     from .host_compat import require_supported_host
     try:
         require_supported_host()
@@ -154,13 +192,12 @@ def preflight(settings, package_root, archive=None, *, consent=False, port=8318,
     for value in ports:
         _require_free_port(value)
     try:
-        raw = download_pinned_archive() if download else bounded_file(archive, MAX_ARCHIVE)
-    except (ValueError, OSError) as exc:
-        code = str(exc)
+        raw = installer.download_candidate_archive() if download else bounded_file(archive, MAX_ARCHIVE)
+    except AcquisitionError as exc:
+        raise _acquisition_refusal(exc) from None
+    except (ValueError, RuntimeError, OSError) as exc:
         if download:
-            raise SetupRefused('download_failed', 'Download of the pinned CPA 8.0.21 release failed '
-                               f'or did not match its pin ({code}); retry or pass --archive.'
-                               + UNCHANGED) from None
+            raise _release_refusal(exc) from None
         raise SetupRefused('archive_unreadable', 'The --archive file is missing, unsafe or too large.'
                            + UNCHANGED) from None
     try:
@@ -168,19 +205,19 @@ def preflight(settings, package_root, archive=None, *, consent=False, port=8318,
         installer._verify_content(content)
     except (ValueError, RuntimeError, OSError):
         raise SetupRefused('archive_mismatch', 'The archive does not match the pinned CPA 8.0.21 '
-                           'linux_amd64 release.' + UNCHANGED) from None
+                           'hermes-owner-v1 linux_amd64 runtime (size and sha256 are pinned in '
+                           'cpa-runtime.json). The stock CPA release is not accepted.' + UNCHANGED) from None
     return installer, content
 
 
 def initialize_managed(settings, package_root, archive=None, *, consent=False, port=8318,
                        isolated_authorization=None, broker_port=None, autostart=False,
                        download=False):
-    """Prepare keys, executable and CPA config, then publish managed mode. No start."""
+    """Prepare executable and CPA config, then publish managed mode. No start."""
     installer, content = preflight(settings, package_root, archive, consent=consent, port=port,
                                    broker_port=broker_port, download=download,
                                    isolated_authorization=isolated_authorization)
-    from hermes_cli.config import load_config, save_config, save_env_value
-    from agent.secret_scope import build_profile_secret_scope
+    from hermes_cli.config import load_config, save_config
     private_directory(settings.home)
     fd = private_open(settings.home / '.cpa-onboarding.lock', os.O_CREAT | os.O_RDWR)
     reset = _home_scope(settings)
@@ -191,25 +228,23 @@ def initialize_managed(settings, package_root, archive=None, *, consent=False, p
             raise SetupRefused('setup_in_progress', 'Another setup for this profile is running.'
                                + UNCHANGED) from None
         cfg = _profile_state(settings)  # Recheck under the lock, before any write.
-        management, inference = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-        # Host writer enforces managed/locked credential policy. Readback is
-        # mandatory: some blocked writers return without raising.
-        for name, value in ((MANAGEMENT_SECRET_ENV, management), (INFERENCE_SECRET_ENV, inference)):
-            save_env_value(name, value)
-            if build_profile_secret_scope(settings.home).get(name) != value:
-                raise SetupRefused('secret_store_locked', 'The Hermes credential store refused the '
-                                   'generated keys; mode remains external and nothing started. '
-                                   'Run hermes cpa doctor before retrying.')
+        # Public access keys are ordinary USER configuration: a fresh random client key
+        # (never a copy of any private key) so the listener is not left open, and no
+        # public management key so public management stays disabled. The owner and
+        # broker use private owner-only channels, so editing either never affects them.
+        # The key lives only in the 0600 CPA config; it is not echoed or stored in .env.
+        access_key = 'sk-' + secrets.token_urlsafe(32)
         try:
             if settings.binary_path.exists():
                 installer.verify_pair()
             else:
                 installer.install_binary(content)
-            ConfigStore(settings.config_path).create_initial_config(port, management, inference)
+            ConfigStore(settings.config_path).create_initial_config(
+                port, access_keys=[access_key], management_key=None)
         except Exception:
-            raise SetupRefused('incomplete', 'Keys were written but executable or CPA config '
-                               'preparation failed; mode remains external and nothing started. '
-                               'Run hermes cpa doctor; do not repeat setup blindly.') from None
+            raise SetupRefused('incomplete', 'Executable or CPA config preparation failed; mode '
+                               'remains external and nothing started. Run hermes cpa doctor; do '
+                               'not repeat setup blindly.') from None
         # Do not commit a stale settings snapshot across preparation.
         current = load_config()
         if current != cfg:
@@ -217,7 +252,8 @@ def initialize_managed(settings, package_root, archive=None, *, consent=False, p
                                'external and nothing started. Run hermes cpa doctor.')
         settings_map = current.setdefault('plugins', {}).setdefault('entries', {}).setdefault(
             'hermes-cpa', {}).setdefault('settings', {})
-        settings_map.update(mode='managed', managed_port=port, autostart=autostart is True)
+        # The listener port is CPA config (server.port), not a plugin setting.
+        settings_map.update(mode='managed', autostart=autostart is True)
         if broker_port is not None:
             settings_map['broker_port'] = broker_port
         if isolated_authorization is not None:
@@ -246,7 +282,8 @@ def setup_managed(settings, package_root, archive=None, *, consent=False, port=8
     outcome = dict(prepared=True, owner='unavailable', lifetime=None, cpa='not_started',
                    broker='disabled' if broker_port is None else 'unavailable',
                    provider='skipped', autostart=autostart is True, port=port,
-                   broker_port=broker_port)
+                   broker_port=broker_port, config_path=str(settings.config_path),
+                   public_access='key_generated', public_management='disabled')
     try:
         _launch(settings, package_root, outcome, enroll=enroll)
     except Exception:

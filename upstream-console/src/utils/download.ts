@@ -1,21 +1,15 @@
+import { saveFile } from '@/hosted/browser';
+
 export type DownloadBlobOptions = {
   filename: string;
   blob: Blob;
-  revokeDelayMs?: number;
 };
 
-export function downloadBlob({ filename, blob, revokeDelayMs = 1000 }: DownloadBlobOptions) {
-  const url = window.URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  link.rel = 'noopener';
-  link.style.display = 'none';
-  document.body.appendChild(link);
-  link.click();
-
-  window.setTimeout(() => {
-    window.URL.revokeObjectURL(url);
-    link.remove();
-  }, revokeDelayMs);
+/**
+ * Save through the shared browser capability: an anchor download in the reference app,
+ * the host save dialog when the console is hosted. The promise rejects if the host
+ * declines or fails, so callers must not report success before it resolves.
+ */
+export function downloadBlob({ filename, blob }: DownloadBlobOptions): Promise<void> {
+  return saveFile(blob, filename);
 }

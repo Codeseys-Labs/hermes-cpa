@@ -1,6 +1,12 @@
-"""Request-scoped facade. Construction and reads never launch an owner."""
+"""Request-scoped facade. Construction and reads never launch an owner.
+
+Managed mode reaches CPA only through the verified owner's IPC; the owner
+alone talks to the child's private channels. No management or inference key
+is resolved for a managed profile.
+"""
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -11,11 +17,37 @@ from pathlib import Path
 from .settings import CpaSettings
 from .contracts import LifecycleState, StatusData, ConfigProjection
 from .config_store import ConfigStore
+from .owner_transport import (ORDINARY_REPLY_LIMIT, ORDINARY_REQUEST_LIMIT, frame_console,
+                              frame_length, read_exact, read_line)
 from .process_owner import (private_directory, private_open, socket_address,
                                       peer_pid, process_identity, require_platform)
 
 
 from .cpa_adapter import CpaAdapter
+
+CONSOLE_OP = re.compile(r'[a-z][a-z0-9_]{0,31}\Z')
+# Owner console dispatch is bounded to 3.5 seconds. Leave time for its framed
+# reply, while staying inside the hosted ASGI child's five-second containment.
+CONSOLE_RPC_SECONDS = 4.5
+# Passive replies re-encode up to 1 MiB of upstream JSON; allow escaping growth.
+PASSIVE_REPLY_LIMIT = 4 * 1024 * 1024
+
+
+class OwnerReadAdapter(CpaAdapter):
+    """Managed passive reads: the verified owner proxies its private control channel.
+
+    Shares CpaAdapter's fixed projections; holds no origin, key or socket.
+    """
+    def __init__(self, controller):
+        self._controller = controller
+
+    def _request(self, path, timeout=5.):
+        result = self._controller._call_supervisor('read', {'path': path},
+                                                   reply_limit=PASSIVE_REPLY_LIMIT)
+        if not isinstance(result, dict) or type(result.get('status')) is not int:
+            return 0, None, None
+        version = result.get('version')
+        return result['status'], result.get('data'), version if isinstance(version, str) else ''
 
 
 class DeadlineAdapter(CpaAdapter):
@@ -98,40 +130,64 @@ class CpaController:
             return self.timeout
         return max(0., min(self.timeout, self.request_deadline - time.monotonic()))
 
-    def _call_supervisor(self, cmd, args=None):
-        if self.mode != 'managed':
+    def _call_supervisor(self, cmd, args=None, *, reply_limit=ORDINARY_REPLY_LIMIT):
+        """One verified exchange; resource failures retain dispatch uncertainty.
+
+        Ordinary commands are one JSON line each way. ``console.*`` commands are
+        length-framed (≤ CONSOLE_IPC_LIMIT encoded bytes each way).
+        """
+        resource = cmd == 'console.resource'
+        dispatched = False
+
+        def unanswered():
+            if resource:
+                return {'ok': False, 'code': 'OUTCOME_UNKNOWN' if dispatched else 'UNAVAILABLE',
+                        'effect_invoked': dispatched, 'response_withheld': False}
             return None
+
+        if self.mode != 'managed':
+            return unanswered()
         timeout = self.remaining()
         if timeout <= 0:
-            return None
+            return unanswered()
         deadline = time.monotonic() + timeout
         try:
+            framed = isinstance(cmd, str) and cmd.startswith('console.')
+            if framed and self.request_deadline is not None:
+                deadline = min(deadline, self.request_deadline)
+            if framed:
+                message = frame_console(cmd, args or {})
+            else:
+                message = json.dumps({'cmd': cmd, 'args': args or {}}).encode() + b'\n'
+                if len(message) > ORDINARY_REQUEST_LIMIT:
+                    return unanswered()
             fd = private_open(self.settings.identity_path)
             with os.fdopen(fd) as src:
                 identity = json.load(src)
             owner = identity['owner']
             if process_identity(owner['pid']) != owner:
-                return None
+                return unanswered()
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                if framed and time.monotonic() >= deadline:
+                    return unanswered()
                 sock.settimeout(max(.001, deadline - time.monotonic()))
                 with socket_address(self.settings.run_dir) as address:
                     sock.connect(address)
                 if peer_pid(sock) != owner['pid'] or process_identity(owner['pid']) != owner:
-                    return None
-                sock.sendall(json.dumps({'cmd': cmd, 'args': args or {}}).encode() + b'\n')
-                data = bytearray()
-                while not data.endswith(b'\n'):
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        return None
-                    sock.settimeout(remaining)
-                    chunk = sock.recv(65536)
-                    if not chunk or len(data) + len(chunk) > 1024 * 1024:
-                        return None
-                    data.extend(chunk)
-                return json.loads(data)
+                    return unanswered()
+                if framed and time.monotonic() >= deadline:
+                    return unanswered()
+                sock.settimeout(max(.001, deadline - time.monotonic()))
+                dispatched = True  # sendall may send a partial frame before raising.
+                sock.sendall(message)
+                if framed:
+                    line, rest = read_line(sock, ORDINARY_REQUEST_LIMIT, deadline)
+                    _, length = frame_length(line)
+                    return json.loads(read_exact(sock, length, deadline, rest))
+                line, rest = read_line(sock, reply_limit, deadline)
+                return None if rest else json.loads(line)
         except (OSError, ValueError, KeyError, RuntimeError, TypeError):
-            return None
+            return unanswered()
 
     def ensure_supervisor(self, lifetime='persistent'):
         """Reuse the verified owner or launch one; a lock loser exits by itself.
@@ -248,6 +304,35 @@ class CpaController:
             return {'ok': False, 'code': 'UNAVAILABLE'}
         return self._call_supervisor('submit', request) or {'ok': False, 'code': 'UNAVAILABLE'}
 
+    def console(self, op, args):
+        """The single scoped console call; the owner's service does the rest.
+
+        ``args`` (including the authenticated backend ``_scope`` and any
+        ``_host_grant``) reach ``OwnerConsoleService.dispatch(op, args)``
+        verbatim. No Go transport exists in this process. A lost execute reply
+        requires reconciliation; a lost effectful resource reply is unknown.
+        """
+        if self.mode != 'managed':
+            return {'ok': False, 'code': 'UNOWNED'}
+        if not isinstance(op, str) or not CONSOLE_OP.match(op) or not isinstance(args, dict):
+            return {'ok': False, 'code': 'INVALID_INPUT'}
+        scope = args.get('_scope')
+        if not isinstance(scope, dict) or scope.get('home') != str(self.settings.home):
+            return {'ok': False, 'code': 'STALE_SCOPE'}
+        result = self._call_supervisor('console.' + op, args)
+        if op == 'resource':
+            valid = isinstance(result, dict) and (
+                (result.get('ok') is True and type(result.get('status')) is int and
+                 isinstance(result.get('headers'), dict) and isinstance(result.get('body_base64'), str)) or
+                (result.get('ok') is False and isinstance(result.get('code'), str) and
+                 type(result.get('effect_invoked')) is bool and type(result.get('response_withheld')) is bool))
+            if not valid:
+                return {'ok': False, 'code': 'OUTCOME_UNKNOWN',
+                        'effect_invoked': True, 'response_withheld': False}
+        if isinstance(result, dict):
+            return result
+        return {'ok': False, 'code': 'RECONCILE_REQUIRED' if op == 'execute' else 'UNAVAILABLE'}
+
     def recovery_status(self):
         """Native read-only discovery, never configuration/journal contents.
 
@@ -258,7 +343,7 @@ class CpaController:
         state = self.snapshot()
         report = dict(available=False, generation=state['generation'],
                       owner_available=state['generation'] > 0,
-                      current_revision='', snapshot_revision='',
+                      current_revision='', snapshot_revision='', candidate_revision='',
                       journal_phase='unavailable', recovery_required=None)
         if self.mode != 'managed':
             return report
@@ -266,6 +351,9 @@ class CpaController:
             report['current_revision'] = self.config_store.compute_digest()
             snapshot = self.config_store._read_bytes(self.settings.config_path.with_suffix('.snapshot'))
             report['snapshot_revision'] = hashlib.sha256(snapshot).hexdigest() if snapshot else ''
+            # Exact bytes of an interrupted write, if one was journaled.
+            candidate = self.config_store._read_bytes(self.config_store.candidate_path)
+            report['candidate_revision'] = hashlib.sha256(candidate).hexdigest() if candidate else ''
             journal = self.config_store._read_bytes(self.settings.config_path.with_suffix('.journal'))
             phase = 'absent'
             if journal:
@@ -431,79 +519,62 @@ def controller_from_profile(settings=None, package_root=None, *, scope=None):
     if scope.home != settings.home:
         raise ValueError('invalid_secret_scope')
     options = profile_options(settings.home)
-    mode = options.get('mode', 'external')
-    adapter = None
-    # The external endpoint is unset by default; reading status never discovers
-    # a service or starts one. Resolve credentials only in this pinned backend.
-    origin = (f"http://127.0.0.1:{options.get('managed_port', 8318)}"
-              if mode == 'managed' else options.get('external_endpoint'))
-    if origin:
-        try:
-            adapter = DeadlineAdapter.from_scope(origin, scope, ProfileSecretResolver(settings.home))
-        except (ValueError, TypeError):
-            pass
+    mode = 'managed' if options.get('mode', 'external') == 'managed' else 'external'
     # A disposable validation permit recorded by explicit setup reaches every
     # owner launch; the installer still re-verifies its expiry and bindings.
     permit = options.get('isolated_authorization')
-    return CpaController(settings, scope=scope, mode=mode if mode == 'managed' else 'external',
-                         package_root=package_root, adapter=adapter,
-                         isolated_authorization=permit if isinstance(permit, str) and permit else None)
+    controller = CpaController(settings, scope=scope, mode=mode, package_root=package_root,
+                               isolated_authorization=permit if isinstance(permit, str) and permit else None)
+    if mode == 'managed':
+        # No key and no public listener: the verified owner proxies fixed reads.
+        controller.adapter = OwnerReadAdapter(controller)
+        return controller
+    # The external endpoint is unset by default; reading status never discovers
+    # a service or starts one. Resolve credentials only in this pinned backend.
+    origin = options.get('external_endpoint')
+    if origin:
+        try:
+            controller.adapter = DeadlineAdapter.from_scope(origin, scope,
+                                                            ProfileSecretResolver(settings.home))
+        except (ValueError, TypeError):
+            pass
+    return controller
 
 
-def build_owner(settings, package_root, *, secret_resolver=None, adapter_factory=None,
-                isolated_authorization=None, lifetime='persistent'):
-    """Resolve this owner's explicit home through Hermes's supported secret API.
+def build_owner(settings, package_root, *, isolated_authorization=None, lifetime='persistent',
+                console_factory=None):
+    """The managed owner for an explicit home; no credential is resolved.
 
-    The optional dependencies are for generated fixture tests. Secrets never
-    enter argv, IPC, identity files or the environment of the owned CPA child.
-    A default-root owner with a configured broker_port also hosts the inference
-    broker; it reads the inference key per admission and never copies it.
+    The CPA child is reached only through its private owner channels, so
+    nothing secret enters argv, IPC, identity files, `.env` or the child's
+    environment. A default-root owner with a configured broker_port also hosts
+    the inference broker on the private inference channel. ``console_factory``
+    defaults to the owner console service; any failure fails closed.
     """
     from .supervisor import CpaSupervisor, InstallPolicy
     from .installer import CpaInstaller
     policy = InstallPolicy(settings.home, package_root)
     try:
         options = profile_options(settings.home)
-        mode, port = options.get('mode', 'external'), options.get('managed_port', 8318)
-        if mode != 'managed' or not policy():
+        if options.get('mode', 'external') != 'managed' or not policy():
             raise ValueError('policy_locked')
         installer = CpaInstaller(settings, package_root,
                                  isolated_authorization=isolated_authorization)
         authorization = installer.runtime_authorization()
-        from .secret_resolver import ProfileSecretResolver, native_scope
-        scope = native_scope(settings)
-        resolver = ProfileSecretResolver(settings.home)
-        def secret():
-            value = (secret_resolver(settings.home) if secret_resolver is not None
-                     else resolver.resolve_management(scope))
-            if not isinstance(value, str) or not value or value.startswith('op://'):
-                raise RuntimeError('secret_unavailable')
-            return value
-        secret()  # Locked/missing credential prevents even a partial CPA launch.
-        origin = f'http://127.0.0.1:{port}'
-        if adapter_factory is not None:
-            adapter = adapter_factory(origin, secret=secret)
-        elif secret_resolver is not None:
-            adapter = DeadlineAdapter(origin, secret=secret)
-        else:
-            adapter = DeadlineAdapter.from_scope(origin, scope, resolver)
-        store = ConfigStore(settings.config_path)
-        def transaction(owner, request):
-            return store.transact(request['expected_revision'], request['changes'],
-                expected_generation=request['expected_generation'], owner=owner.transaction_owner(),
-                restart_consent=request.get('restart_consent', False))
+        if console_factory is None:
+            from .console_service import OwnerConsoleService as console_factory
         broker = None
         broker_port = options.get('broker_port')
         if type(broker_port) is int and is_default_home(settings.home):
             from .subscription_broker import SubscriptionBroker
-            broker = lambda: SubscriptionBroker(settings.home, origin, port=broker_port,
-                                                 authorization=authorization)
-        return CpaSupervisor(settings, mode=mode, port=port, policy=policy,
-            probe=adapter.probe, transaction=transaction,
-            compatibility_check=installer.verify_pair,
-            lifetime=lifetime, broker=broker, authorization=authorization)
+            # Enrollment binds the broker endpoint, never CPA's public listener.
+            broker = lambda owner: SubscriptionBroker(settings.home, owner.inference,
+                                                       port=broker_port, authorization=authorization)
+        return CpaSupervisor(settings, mode='managed', policy=policy,
+            compatibility_check=installer.verify_pair, lifetime=lifetime, broker=broker,
+            console=console_factory, authorization=authorization)
     except Exception:
-        # Start remains unavailable; reads can report failure without exposing vault errors.
+        # Start remains unavailable; reads report failure without exposing causes.
         owner = CpaSupervisor(settings, mode='managed', policy=lambda: False, lifetime=lifetime)
         owner._transition(LifecycleState.FAILED, 'secret_or_policy_unavailable')
         return owner

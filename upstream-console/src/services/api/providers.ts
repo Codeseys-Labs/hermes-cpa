@@ -1,6 +1,7 @@
 import { useAuthStore } from '@/stores/useAuthStore';
 import { apiClient } from './client';
 import { guardConfigConnection } from './configValue';
+import { configRevisionArgs, inheritConfigRevision } from './configRevision';
 import { isRecord } from '@/utils/helpers';
 import { normalizeApiKeyEntry, normalizeProviderGroups } from './transformers';
 import { serializeModelOptions } from './providerModels';
@@ -256,7 +257,9 @@ const getGroups = async (family: ProviderFamily) => {
     session.isAuthenticated !== current.isAuthenticated
   )
     throw conflict();
-  return readProviderGroups(raw, family);
+  const groups = readProviderGroups(raw, family);
+  inheritConfigRevision(raw, groups);
+  return groups;
 };
 // Remove the old UI-only field at known config locations, not inside opaque
 // user maps such as headers. Raw snapshots otherwise preserve unknown fields.
@@ -272,7 +275,7 @@ const cleanModelTestFields = (value: Record<string, unknown>) => {
     models: value.models.map((model) => (isRecord(model) ? removeTestModel(model) : model)),
   };
 };
-const putGroups = (family: ProviderFamily, groups: Record<string, unknown>[]) =>
+const putGroups = (family: ProviderFamily, groups: Record<string, unknown>[], snapshot = groups) =>
   apiClient.put(
     `/config/api-keys/${family}`,
     groups.map((group) => ({
@@ -280,7 +283,8 @@ const putGroups = (family: ProviderFamily, groups: Record<string, unknown>[]) =>
       keys: (group.keys as unknown[]).map((key) =>
         isRecord(key) ? cleanModelTestFields(key) : key
       ),
-    }))
+    })),
+    ...configRevisionArgs(snapshot)
   );
 
 /** Locate by persisted snapshot, never by flattened row index. Refuse ambiguous duplicates. */
@@ -437,7 +441,7 @@ const createKey = async (family: ProviderFamily, config: KeyConfig) => {
   await putGroups(family, [
     ...groups,
     { name: `${family}-${number}`, ...(baseUrl ? { 'base-url': baseUrl } : {}), keys: [payload] },
-  ]);
+  ], groups);
 };
 const updateKey = async (
   family: ProviderFamily,
@@ -564,7 +568,7 @@ export const providersApi = {
   },
   async createOpenAIProvider(config: OpenAIProviderConfig) {
     const groups = await getGroups('openai-compatibility');
-    await putGroups('openai-compatibility', [...groups, serializeOpenAIGroup(config)]);
+    await putGroups('openai-compatibility', [...groups, serializeOpenAIGroup(config)], groups);
   },
   async updateOpenAIProvider(_name: string, _index: number, config: OpenAIProviderConfig) {
     const groups = await getGroups('openai-compatibility');
@@ -618,7 +622,8 @@ export const providersApi = {
     const index = findOpenAISource(groups, source);
     await putGroups(
       'openai-compatibility',
-      groups.filter((_, i) => i !== index)
+      groups.filter((_, i) => i !== index),
+      groups
     );
   },
 };

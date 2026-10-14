@@ -1,0 +1,327 @@
+{
+  "schema": 1,
+  "integration": "hermes-owner-v1",
+  "upstream_repository": "https://github.com/router-for-me/CLIProxyAPI",
+  "upstream_tag": "v8.0.21",
+  "base_commit": "54946fa3dfa29c6ca7312ac141a92cdd5e413771",
+  "patch_path": "runtime-integration/patches/0001-hermes-owner-v1.patch",
+  "patch_sha256": "4382892237ec0a87e0cc3d340f30b281022cf6b2187e77cf6220ef1580bc28e9",
+  "patch_size": 334205,
+  "files": [
+    {
+      "path": "cmd/server/hermes_prepare.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "238abf6b34d3154b13a54cc592cc0aedb279faa2b910d5961594ce77acc94abc"
+    },
+    {
+      "path": "cmd/server/hermes_prepare_test.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "0ff8979ee72a4aa6c0ba8d8beb3f6e023c300da7a5467c49dcaf8131720236cd"
+    },
+    {
+      "path": "cmd/server/main.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "18644149ca9ff89dc508fb88dde4b98eaa09c1103336c902bc489570d83d0378",
+      "after_sha256": "bd39b62f0b9b6a842764800721c7aad9c72214dddd9e10aa13eacd571c310d8c"
+    },
+    {
+      "path": "internal/api/handlers/management/api_tools.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "ebc0220df55f74192fbab0a1092ddf719c77ca29f4caf1d2d7e15e6496966139",
+      "after_sha256": "b646fdb261b5b76554b6abac414c8498ab5c772a804e3e97751a5c3feafca1a2"
+    },
+    {
+      "path": "internal/api/handlers/management/auth_files_oauth_callback.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "d2ef9cac19e99030a0c54d2d45aa5573e7d2c01c556724f490812d92a40b267c",
+      "after_sha256": "f925772fad91467d2aa44c39e6bb8b14fe88efcbfa2f687e6a9f87d7ba0db039"
+    },
+    {
+      "path": "internal/api/handlers/management/auth_files_oauth_callback_owner_test.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "cf3c6e86fc3be76023955251c711600a37c3f3d00849fe8ab22024f9bf7b7138"
+    },
+    {
+      "path": "internal/api/handlers/management/auth_files_plugin_oauth_owner_test.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "d8caef6e4cee6b32ec26fcc5b82048c1a4ae3a04d7a45e0c3f344b58c522efd1"
+    },
+    {
+      "path": "internal/api/handlers/management/auth_files_provider_oauth.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "82f0eff7622170125cfb5880cec6638c2e071a1118efe3794875d47c9342d12c",
+      "after_sha256": "75016c589a44891b2b965ca7243a5b9561d0edb3175f51a71350235a569eb14d"
+    },
+    {
+      "path": "internal/api/handlers/management/auth_files_v8.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "57cfaca84e88d90b94d9d9f41a228a93e14262bbccac41d38e607647d19e6098",
+      "after_sha256": "9db8689ad4b1f03b8e37e3599b4667ffbf51c20a4c20f829d9cbeb6b923710a9"
+    },
+    {
+      "path": "internal/api/handlers/management/config_basic.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "4aeb67d7467ae008f3e078b1b35c4712bf7c94687631a1ad3ac301dbdefee971",
+      "after_sha256": "c9eaf1ac255c82c9232d9931dd7abb5ba55afd656e631b6e35dc6f1365374391"
+    },
+    {
+      "path": "internal/api/handlers/management/config_v8.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "f4eb277904629aa12d3642ff25352e7945782516af39c69e7c1f10bf8bc04e8f",
+      "after_sha256": "ecf08c38d357eff0d137d2e76b42a8b74641591c6689f143ebf3d41b5d016bf2"
+    },
+    {
+      "path": "internal/api/handlers/management/config_v8_prepare.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "d9f768cc9eda90bddff3292ecc06112b6319fda159b06d2d6dae375ac7e1420a"
+    },
+    {
+      "path": "internal/api/handlers/management/config_v8_prepare_test.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "ec3db7795227f6d547f2a7a0c535d1ed32a01d2b7d1451be4ca747efa5016e1a"
+    },
+    {
+      "path": "internal/api/handlers/management/handler.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "a4b813d4c49bc6397fa534049868b6705015696e226cc107c5d371565ce31a92",
+      "after_sha256": "c79ea35ee390c3bd72e710013f130f7f0dc558990bd9a62576c04963cc2fbbb5"
+    },
+    {
+      "path": "internal/api/handlers/management/oauth_callback.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "338d235d136380ffe328667ee3687399e225ff67527139d4385f2ea494770ac1",
+      "after_sha256": "ec9e359f9c4615eacc503665f3ac96d86f1345999223008ec8f34eae4fc3f6d4"
+    },
+    {
+      "path": "internal/api/handlers/management/plugin_quota.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "a3519aeb3ec2a45d547fe4225c32bc588715cdd5406085f06093a12ae41764ac",
+      "after_sha256": "f560307fbe9a8c21c5c653c5d8f1613f15b4d85ea94b5e323a3cd3bdd8de21d0"
+    },
+    {
+      "path": "internal/api/handlers/management/plugin_review.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "d6710c754c731a9ebbfbf71fb05ac32328b4e0487285ab3994900da6a2532d4d"
+    },
+    {
+      "path": "internal/api/server.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "b16d0464175af0d91881c67dee0af5c56e2a1a5dc36b4064bb873ad62cd6678e",
+      "after_sha256": "cce68c25e42a01daf06edf4047d84fd002007e0800e9ab03bbcc8e9be1b02568"
+    },
+    {
+      "path": "internal/api/server_hermes_owner.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "c425af5b9f82138a56f595abf31a992be1dea264b7d800377160ea1eb215763b"
+    },
+    {
+      "path": "internal/api/server_hermes_owner_plugin_test.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "859651c9b4f5ddf3539b9609dc86d8f72427a4c9f2655d80c30caf1bf0f17536"
+    },
+    {
+      "path": "internal/api/server_hermes_owner_test.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "27ebb74997918efaeb6c5686354b10be103b0498aabd6f699c130ac88af88fab"
+    },
+    {
+      "path": "internal/api/server_management.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "aff618831d334412a174b280716e6d6fd832bf2358f37ac5adb17aee4eb4ca5b",
+      "after_sha256": "9caa7a982a852b977991190b50575370d0959eaea0099aa59afbec066cfccc45"
+    },
+    {
+      "path": "internal/api/server_management_v8.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "8475ddebc1a3ce3485eac4f16f0327c6c04587a0d4e102fd8da073392c59388e",
+      "after_sha256": "f0e064c2bda80ae7d407ee0539535ddf0830bc1ce75d5c4e2ef88bed29a7aab8"
+    },
+    {
+      "path": "internal/api/server_middleware.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "b5aca000db1b01b21230bc173274dcd02fefb2878008cc8f767b038f7e21b823",
+      "after_sha256": "b3ecfb8b5e5d2c9c81563f052c4aeb9ab668fd197c199a4d63dc2fb0c36928a4"
+    },
+    {
+      "path": "internal/api/server_options.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "881692112cda9ea28cfce16cfa962d05b3ea6a026c750ed7e4eb6295c3cb641d",
+      "after_sha256": "4d550011a8fa54b945601e49a5bb7ab54aa69e8086593bb1a54dcdf15b6c146c"
+    },
+    {
+      "path": "internal/api/server_reload.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "375857800e804d775b267a01680856f9053de789210639ba34e4de51a80b8cf4",
+      "after_sha256": "8417159ae1f0e723facdc4dfb1cfdd68f0e14f37bc1d98bf548901b1c6845d97"
+    },
+    {
+      "path": "internal/api/server_routes.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "0f573b3e12cfd1f413f406da6cce08592d6e94f89d6a73ff9f9a16f19312fa09",
+      "after_sha256": "7ff62b252ac5e8f83f809148edd5dd3bd19c58e8727d8ed8a0340eb03caeaebb"
+    },
+    {
+      "path": "internal/hermesowner/channel.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "6e1993276f25ee8efb8a2a4c6e1caca856f36e58d14d3e13914c9f23ea0f71f7"
+    },
+    {
+      "path": "internal/hermesowner/egress.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "3aee03a2bfdb2f443494f736f997c8acdcb8067b1cc7f1753e3312515d637890"
+    },
+    {
+      "path": "internal/hermesowner/egress_test.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "09421e4b692775d4b9da3084bc776877703e4fea777c7706feb57cf86071bc43"
+    },
+    {
+      "path": "internal/hermesowner/markers.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "8318c09bd22edf922a3ff5411565e7328eadfbfcf1bfb2338e7b7e8e7fbda0be"
+    },
+    {
+      "path": "internal/hermesowner/options.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "b65832c897406980a0ca241c3ea39ebbb427aa1b5e45f8c1e5ca56a030433cdc"
+    },
+    {
+      "path": "internal/hermesowner/peer_linux.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "583b34c462204a60d8b0130ef33ff76dda8216389f27d7195d97240af5ec6b12"
+    },
+    {
+      "path": "internal/hermesowner/peer_linux_test.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "5f55ce64a5e91fec07fb1d233753567f89f0d867729a3d480a04efaf6c0db1d7"
+    },
+    {
+      "path": "internal/hermesowner/peer_other.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "beea08a5de0dc695dd9a482a766795d701c4f9851afc443c60cde7e96dc1d9ca"
+    },
+    {
+      "path": "internal/pluginhost/adapters_usage_translation.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "3c12221ed5530ceb47c49bfa8ea6f4469691ba45cc3b7b9294303dbed4034337",
+      "after_sha256": "3db13547afda51bdd3ab7024d704c9eed118e474f830a2d8cd86b3ef89ce90a2"
+    },
+    {
+      "path": "internal/pluginhost/auth_provider.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "0d1f56ef164405aeb0d0f7f005354320eb10e05d1d8c3f5694dfd791b0ab4171",
+      "after_sha256": "a352865e2b48b2a049cbf1df770cbcd509431c2f8b1b0abe17979290f3258b4a"
+    },
+    {
+      "path": "internal/pluginhost/dispatch_identity.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "253b5d78d3e13f73e1a74f1d607d8371d2f1d233381a4b0d67ac17d61552ba9c"
+    },
+    {
+      "path": "internal/pluginhost/dispatch_identity_test.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "ff1da5d56e651fca5591d61cbdd195e6f15761420d56568479449160dd4b1e77"
+    },
+    {
+      "path": "internal/pluginhost/host.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "1647f5140a9d48d7e86c216fab47aa20ac5b77ab784dde2449bdb48b566c5b69",
+      "after_sha256": "ff0c5b1f5ad52af9860f5dfbc9cb05ac584b3c4b5030ed774498c3de99cda947"
+    },
+    {
+      "path": "internal/pluginhost/management.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "5ec1c637005f330e40c7c911633b2b6a99d2c201cf14c1e600f92bbb094ae0db",
+      "after_sha256": "cdd0d0fd702117ba9395ce2959e72a8db0ca3ecd7af87e6ea307e9255b2aaad6"
+    },
+    {
+      "path": "internal/pluginhost/management_plugin_precondition_test.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "af0dded0a4f1771585c51d2e4ae863ee5c6ada8e1d8e4100209f6f57752f756e"
+    },
+    {
+      "path": "internal/pluginhost/management_registry_test.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "a90f9268056aa76f646320cb11925143e401e68b97f9365fa49d03e912c60876"
+    },
+    {
+      "path": "internal/pluginhost/management_resource_precondition_test.go",
+      "status": "added",
+      "mode": "100644",
+      "before_sha256": null,
+      "after_sha256": "cdff3d642562fc007bd1960984a046c015e5b98ffc48e20edb0155ea2327d8c5"
+    },
+    {
+      "path": "internal/pluginhost/quota_provider.go",
+      "status": "modified",
+      "mode": "100644",
+      "before_sha256": "f92d1dc2e9529f479609aaea51f3cc78c6a0922567108f8b790200a418a6087a",
+      "after_sha256": "bb568e1366a03e2f27f99d6c63ce6958ecad17df5591182027a9b81abcb6e8da"
+    }
+  ]
+}

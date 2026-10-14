@@ -1,3 +1,4 @@
+import { getUiStorage } from '@/hosted/storage';
 import {
   QUOTA_SORT_MODES,
   QUOTA_TAB_ORDER,
@@ -23,9 +24,8 @@ export const isQuotaSortMode = (value: unknown): value is QuotaSortMode =>
   typeof value === 'string' && QUOTA_SORT_MODE_SET.has(value);
 
 export const readQuotaUiState = (): QuotaUiState | null => {
-  if (typeof window === 'undefined') return null;
   try {
-    const raw = window.sessionStorage.getItem(QUOTA_UI_STATE_KEY);
+    const raw = getUiStorage('session').getItem(QUOTA_UI_STATE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as QuotaUiState;
     if (!parsed || typeof parsed !== 'object') return null;
@@ -46,10 +46,9 @@ export const readQuotaUiState = (): QuotaUiState | null => {
  * field every time either one changed.
  */
 export const writeQuotaUiState = (state: QuotaUiState) => {
-  if (typeof window === 'undefined') return;
   try {
     const next = { ...readQuotaUiState(), ...state };
-    window.sessionStorage.setItem(QUOTA_UI_STATE_KEY, JSON.stringify(next));
+    getUiStorage('session').setItem(QUOTA_UI_STATE_KEY, JSON.stringify(next));
   } catch {
     // ignore
   }

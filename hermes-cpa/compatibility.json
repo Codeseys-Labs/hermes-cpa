@@ -4,18 +4,10 @@
       "cpa_version": "8.0.21",
       "console_version": "1.25.6",
       "platform": "linux_amd64",
-      "console_sha256": "85da437adb713e304811b157b0718f41d03abe06558d67f1f1414daf16a792b5",
-      "binary_sha256": "95435293c56e856db7d70b377d30b2b2c00e32ff1c06c41ae46758a9f6febdee",
-      "archive_sha256": "a40164e25a60869df2c489702383d4e64dc27bb08eaafd7b04a101a2f5cfc625",
-      "tested_endpoints": [
-        "/v8/management/config",
-        "/v8/management/observability/usage/api-keys"
-      ],
-      "editable_fields": [
-        "routing.strategy",
-        "routing.retry.request-retry",
-        "observability.logs.request-log"
-      ]
+      "integration": "hermes-owner-v1",
+      "console_sha256": "f3e018954923829ef0c9275ffa733eaa9c3c261b7979996215359d76e90e4008",
+      "binary_sha256": "25d8a09391d2ba62b0b1de8f6d6171b7528c6c85b39a64610278c4bd97e0e0f0",
+      "archive_sha256": "f573de3bea88f04365ab1ad6e889849c17ce52b54c418d9d058de258cd22ae5c"
     }
   ],
   "notice_sha256": {
@@ -23,6 +15,6 @@
     "THIRD_PARTY_NOTICES.md": "8c35fd9ffc42ee70275fd79786306ed490bc3391fc70b2e8fd64d30e0ccceec2"
   },
   "tested_minimum_hermes": null,
-  "candidate_status": "unaccepted; read-oriented slice; full parity deferred; not product acceptance",
+  "candidate_status": "unaccepted; full CPAMC port; generated-data qualification only; not product acceptance",
   "adr_status": "Proposed"
 }

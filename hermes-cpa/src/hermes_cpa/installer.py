@@ -1,8 +1,11 @@
 """Compatibility gate, pinned acquisition and retain-data lifecycle operations.
 
-Packaged pins are trusted inputs. The only network fetch is the exact pinned
-upstream release URL below, after explicit setup consent; no latest/caller URL,
-boot service, provider settings rewrite, OAuth-store copy or recursive removal.
+Packaged pins are trusted inputs. The executable is the Hermes owner-integration
+build of CPA 8.0.21 described by ``cpa-runtime.json``, never the stock release.
+It comes from a local --archive or from the one fixed private candidate asset
+fetched through an authenticated gh CLI after explicit setup consent; both must
+match the packaged size and sha256. No latest/caller URL, stock fallback, boot
+service, provider settings rewrite, OAuth-store copy or recursive removal.
 """
 import hashlib
 import io
@@ -17,49 +20,41 @@ from pathlib import Path, PurePosixPath
 from .process_owner import require_platform, private_directory, private_open
 from .config_store import ConfigStore
 from .authorization import AuthorizationDeadline
+from .candidate_download import download_candidate
+from .runtime_manifest import (BINARY_NAME, CPA_VERSION, INTEGRATION, MAX_ARTIFACT_BYTES, PLATFORM,
+                               glibc_tuple, parse_runtime_manifest)
 
-EXPECTED_TAR_SHA = 'a40164e25a60869df2c489702383d4e64dc27bb08eaafd7b04a101a2f5cfc625'
-EXPECTED_BIN_SHA = '95435293c56e856db7d70b377d30b2b2c00e32ff1c06c41ae46758a9f6febdee'
-MAX_ARCHIVE = 100 * 1024 * 1024
-# Upstream release metadata for the single supported pair (router-for-me/CLIProxyAPI
-# tag v8.0.21). Integrity comes from EXPECTED_TAR_SHA, never from the transport.
-UPSTREAM_ARCHIVE_URL = ('https://github.com/router-for-me/CLIProxyAPI/releases/download/'
-                        'v8.0.21/CLIProxyAPI_8.0.21_linux_amd64.tar.gz')
-UPSTREAM_ARCHIVE_SIZE = 23119655
+MAX_ARCHIVE = MAX_ARTIFACT_BYTES
+# Notices and other small members that may travel beside the executable.
+AUXILIARY_BYTES = 4 * 1024 * 1024
 
 
-def download_pinned_archive(timeout=120.):
-    """Fetch the fixed upstream archive into memory and verify size and digest.
+class UnsupportedLibc(ValueError):
+    """Host C library cannot run the pinned executable; str() is the stable code."""
 
-    Redirects may only stay on HTTPS. Proxy/netrc environment is ignored so no
-    ambient credential is attached. Nothing is written to disk here.
-    """
-    import httpx
+    def __init__(self, required, found):
+        super().__init__('unsupported_libc')
+        self.required, self.found = required, found
 
-    def https_only(request):
-        if request.url.scheme != 'https':
-            raise ValueError('download_insecure_redirect')
 
-    data = bytearray()
+def _version(parts):
+    return tuple(parts) + (0,) * (3 - len(parts))
+
+
+def host_glibc():
+    """Host glibc version tuple, or None for musl/unknown C libraries."""
     try:
-        with httpx.Client(trust_env=False, follow_redirects=True, max_redirects=5,
-                          timeout=timeout, event_hooks={'request': [https_only]}) as client:
-            with client.stream('GET', UPSTREAM_ARCHIVE_URL) as response:
-                if response.status_code != 200:
-                    raise ValueError('download_failed')
-                for chunk in response.iter_bytes():
-                    data.extend(chunk)
-                    if len(data) > UPSTREAM_ARCHIVE_SIZE:
-                        raise ValueError('download_size_mismatch')
-    except ValueError:
-        raise
-    except Exception:
-        raise ValueError('download_failed') from None
-    if len(data) != UPSTREAM_ARCHIVE_SIZE:
-        raise ValueError('download_size_mismatch')
-    if hashlib.sha256(data).hexdigest() != EXPECTED_TAR_SHA:
-        raise ValueError('Archive SHA mismatch')
-    return bytes(data)
+        return glibc_tuple(os.confstr('CS_GNU_LIBC_VERSION'))
+    except (ValueError, OSError, AttributeError, TypeError):
+        return None
+
+
+def require_runtime_libc(runtime):
+    """Refuse before launch when the host glibc is older than the build's max GLIBC symbol."""
+    required = glibc_tuple(runtime.data['build']['glibc_max'])
+    found = host_glibc()
+    if found is None or _version(found) < _version(required):
+        raise UnsupportedLibc(required, found)
 
 
 def digest(path):
@@ -176,6 +171,18 @@ class CpaInstaller:
         """
         return self._verify_content(None)
 
+    def runtime_manifest(self):
+        """Packaged runtime identity; refuses a missing, symlinked or drifted manifest."""
+        return parse_runtime_manifest(bounded_file(self.package_root / 'cpa-runtime.json', 65536))
+
+    def _pinned_artifact(self):
+        runtime = self.runtime_manifest()
+        if not runtime.pinned:
+            # The integration build has not been produced and pinned yet. There is
+            # no stock fallback to install instead.
+            raise ValueError('runtime_unpinned')
+        return runtime
+
     def _verify_content(self, content):
         require_platform()
         raw = bounded_file(self.package_root / 'compatibility.json', 65536)
@@ -188,14 +195,20 @@ class CpaInstaller:
         pairs = manifest.get('supported_pairs', [])
         if not isinstance(pairs, list) or any(not isinstance(p, dict) for p in pairs):
             raise ValueError('invalid_manifest')
-        pair = next((p for p in pairs if p.get('cpa_version') == '8.0.21' and
-                     p.get('console_version') == '1.25.6' and p.get('platform') == 'linux_amd64'), None)
+        pair = next((p for p in pairs if p.get('cpa_version') == CPA_VERSION and
+                     p.get('console_version') == '1.25.6' and p.get('platform') == PLATFORM and
+                     p.get('integration') == INTEGRATION), None)
         if pair is None:
             raise ValueError('unsupported_pair')
-        pinned_archive = pair.get('archive_sha256')
-        if pinned_archive is not None and pinned_archive != EXPECTED_TAR_SHA:
+        runtime = self._pinned_artifact()
+        artifact = runtime.artifact
+        if pair.get('archive_sha256') != artifact.archive_sha256:
             raise ValueError('archive_pin_mismatch')
-        if content is not None and hashlib.sha256(content).hexdigest() != pair['binary_sha256']:
+        if pair.get('binary_sha256') != artifact.binary_sha256:
+            raise ValueError('binary_pin_mismatch')
+        require_runtime_libc(runtime)
+        if content is not None and (len(content) != artifact.binary_size or
+                                    hashlib.sha256(content).hexdigest() != artifact.binary_sha256):
             raise ValueError('binary_mismatch')
         asset = self.package_root / 'assets/cpamc.html'
         # Full adapted-source provenance is 71KB for the pinned console. This
@@ -236,12 +249,18 @@ class CpaInstaller:
         require_platform()
         return self.archive_binary_bytes(bounded_file(archive_path, MAX_ARCHIVE))
 
+    def download_candidate_archive(self):
+        """Fetch the fixed private candidate asset through gh; verified bytes, no disk writes."""
+        require_platform()
+        return download_candidate(self._pinned_artifact().artifact)
+
     def archive_binary_bytes(self, raw):
         """Extract the pinned executable from already-read archive bytes."""
         require_platform()
         if len(raw) > MAX_ARCHIVE:
             raise ValueError('file_too_large')
-        if hashlib.sha256(raw).hexdigest() != EXPECTED_TAR_SHA:
+        artifact = self._pinned_artifact().artifact
+        if len(raw) != artifact.archive_size or hashlib.sha256(raw).hexdigest() != artifact.archive_sha256:
             raise ValueError('Archive SHA mismatch')
         # Parse the exact bytes hashed, not a path reopened after verification.
         with tarfile.open(fileobj=io.BytesIO(raw), mode='r:gz') as archive:
@@ -259,11 +278,14 @@ class CpaInstaller:
                 if member.isfile():
                     files.add(str(path))
                 expanded += member.size
-                if expanded > MAX_ARCHIVE:
+                if expanded > artifact.binary_size + AUXILIARY_BYTES:
                     raise ValueError('archive_too_large')
-                if member.name == 'cli-proxy-api' and member.isfile():
-                    binary = archive.extractfile(member).read(MAX_ARCHIVE + 1)
-            if binary is None or hashlib.sha256(binary).hexdigest() != EXPECTED_BIN_SHA:
+                if member.name == BINARY_NAME and member.isfile():
+                    if member.size != artifact.binary_size:
+                        raise ValueError('binary_mismatch')
+                    binary = archive.extractfile(member).read(artifact.binary_size + 1)
+            if (binary is None or len(binary) != artifact.binary_size or
+                    hashlib.sha256(binary).hexdigest() != artifact.binary_sha256):
                 raise ValueError('binary_mismatch')
             return binary
 

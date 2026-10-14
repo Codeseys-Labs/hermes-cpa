@@ -8,6 +8,7 @@ lifecycle-owned facade. Nothing here derives identity from client paths/env.
 import hashlib
 import json
 import sys
+import time
 from pathlib import Path
 
 # Hermes loads this file directly from an installed standalone package. Resolve
@@ -46,14 +47,25 @@ class BoundaryError(Exception):
 
 ERRORS = {'UNAUTHORIZED', 'UNAVAILABLE', 'STALE_SCOPE', 'STALE_GENERATION',
           'STALE_REVISION', 'INVALID_INPUT', 'READ_ONLY', 'POLICY_LOCKED',
-          'CONSENT_REQUIRED', 'RECONCILE_REQUIRED', 'BUSY', 'CONFLICT'}
+          'CONSENT_REQUIRED', 'RECONCILE_REQUIRED', 'BUSY', 'CONFLICT',
+          'LEASE_REQUIRED', 'LEASE_EXPIRED', 'REVIEW_REQUIRED', 'REVIEW_STALE',
+          'RESOURCE_CONFLICT', 'REQUEST_CONFLICT', 'OUTCOME_UNKNOWN',
+          'ROUTE_NOT_ALLOWED', 'PAYLOAD_TOO_LARGE', 'RESPONSE_TOO_LARGE',
+          'BATCH_SPLIT_REQUIRED', 'OAUTH_STATE_REQUIRED', 'OAUTH_STATE_MISMATCH',
+          'OAUTH_PROVIDER_MISMATCH', 'INVALID_REQUEST', 'INVALID_CONFIG',
+          'NOT_FOUND', 'READ_ONLY_FIELD', 'READ_FAILED', 'RECOVERY_REQUIRED',
+          'RESOURCE_GONE', 'RESOURCE_REVOKED', 'RESOURCE_PATH_DENIED', 'REDIRECT_DENIED', 'INVALID_RESPONSE'}
 
 
-def error(code, status):
+def error(code, status, effect=None):
     if code not in ERRORS:
         code = 'UNAVAILABLE'
-    return JSONResponse({'api_version': 1, 'error': {
-        'code': code, 'message': code.replace('_', ' ').capitalize(), 'retryable': False}},
+    details = {'code': code, 'message': code.replace('_', ' ').capitalize(), 'retryable': False}
+    if isinstance(effect, dict):
+        for key in ('effect_invoked', 'response_withheld'):
+            if type(effect.get(key)) is bool:
+                details[key] = effect[key]
+    return JSONResponse({'api_version': 1, 'error': details},
         status_code=status, headers={'Cache-Control': 'no-store'})
 
 
@@ -249,3 +261,144 @@ def feature(request: Request):
 @router.get('/console/asset')
 def asset(request: Request):
     return dispatch(request, 'asset')
+
+
+def console_dispatch(request, op, payload, deadline=None):
+    from hermes_cpa.console_protocol import ConsoleError
+    from hermes_cpa.host_binding import console_call, read_controller
+    from hermes_cpa.controller import CONSOLE_RPC_SECONDS
+    deadline = min(time.monotonic() + CONSOLE_RPC_SECONDS, deadline) if deadline is not None else (
+        time.monotonic() + CONSOLE_RPC_SECONDS)
+    data = None
+
+    def resource_effect():
+        if op != 'resource' or not isinstance(data, dict):
+            return None
+        if data.get('ok') is True:
+            return {'effect_invoked': True, 'response_withheld': True}
+        return {'effect_invoked': data.get('effect_invoked', True),
+                'response_withheld': data.get('response_withheld', False)}
+
+    try:
+        host = getattr(request.app.state, 'cpa_host', None)
+        if host is not None:
+            binding = host.authenticate(request)
+            if binding is None:
+                raise BoundaryError('UNAUTHORIZED', 401)
+            with binding.guard():
+                scope, controller = binding.scope, binding.controller
+                if (request.headers.get('X-CPA-Scope') != scope.scope_id or
+                        request.headers.get('X-CPA-Epoch') != str(scope.selection_epoch)):
+                    raise BoundaryError('STALE_SCOPE')
+                if scope.mode != 'managed':
+                    raise BoundaryError('READ_ONLY', 403)
+                if scope.policy_locked and op not in ('result', 'resource_close'):
+                    raise BoundaryError('POLICY_LOCKED', 403)
+                homes = getattr(request.app.state, 'cpa_guard_homes', None)
+                if homes is not None:
+                    homes.add(controller.settings.home)
+                data = console_call(request, controller, op, payload, binding)
+                binding.assert_current()
+                scope_id = scope.scope_id
+        else:
+            found = read_controller(request, console_deadline=deadline)
+            if found is None:
+                raise BoundaryError('UNAUTHORIZED', 401)
+            scope_id, controller = found
+            homes = getattr(request.app.state, 'cpa_guard_homes', None)
+            if homes is None:
+                raise BoundaryError('UNAVAILABLE', 503)
+            homes.add(controller.settings.home)
+            data = console_call(request, controller, op, payload)
+        if data.get('ok') is False:
+            return error(data.get('code'), 409, data if op == 'resource' else None)
+        return JSONResponse({'api_version': 1, 'scope_id': scope_id,
+                             'generation': controller.generation,
+                             'revision': controller.revision, 'data': data},
+                            status_code=202 if op == 'execute' else 200,
+                            headers={'Cache-Control': 'no-store', 'Pragma': 'no-cache'})
+    except (BoundaryError, ConsoleError) as exc:
+        effect = resource_effect()
+        code = ('OUTCOME_UNKNOWN' if effect and effect['effect_invoked'] and
+                not effect['response_withheld'] else exc.code)
+        return error(code, getattr(exc, 'status', 409), effect)
+    except Exception:
+        effect = resource_effect()
+        return error('OUTCOME_UNKNOWN' if effect is not None else 'UNAVAILABLE', 503, effect)
+
+
+async def console_mutation(request, op):
+    from hermes_cpa.console_protocol import WIRE_LIMIT
+    from starlette.concurrency import run_in_threadpool
+    from hermes_cpa.controller import CONSOLE_RPC_SECONDS
+    deadline = time.monotonic() + CONSOLE_RPC_SECONDS
+    # Profile selects the host's authenticated context, not console authority.
+    # Capability identifiers still never enter query strings or access logs.
+    if (set(request.query_params) - {'profile'} or
+            len(request.query_params.getlist('profile')) > 1):
+        return error('INVALID_INPUT', 422)
+    raw = bytearray()
+    try:
+        async for chunk in request.stream():
+            if len(raw) + len(chunk) > WIRE_LIMIT:
+                return error('PAYLOAD_TOO_LARGE', 413)
+            raw.extend(chunk)
+        payload = json.loads(raw)
+        if (not isinstance(payload, dict) or
+                any(not isinstance(k, str) or k.startswith('_') for k in payload)):
+            return error('INVALID_INPUT', 422)
+        if not isinstance(payload.get('document_id'), str):
+            return error('STALE_SCOPE', 409)
+    except (ValueError, TypeError, RecursionError):
+        return error('INVALID_INPUT', 422)
+    return await run_in_threadpool(console_dispatch, request, op, payload, deadline)
+
+
+@router.post('/console/unlock')
+async def console_unlock(request: Request):
+    return await console_mutation(request, 'unlock')
+
+
+@router.post('/console/lock')
+async def console_lock(request: Request):
+    return await console_mutation(request, 'lock')
+
+
+@router.post('/console/prepare')
+async def console_prepare(request: Request):
+    return await console_mutation(request, 'prepare')
+
+
+@router.post('/console/execute')
+async def console_execute(request: Request):
+    return await console_mutation(request, 'execute')
+
+
+@router.post('/console/result')
+async def console_result(request: Request):
+    return await console_mutation(request, 'result')
+
+
+@router.post('/console/browser')
+async def console_browser(request: Request):
+    return await console_mutation(request, 'browser')
+
+
+@router.post('/console/plugin')
+async def console_plugin(request: Request):
+    return await console_mutation(request, 'plugin')
+
+
+@router.post('/console/file')
+async def console_file(request: Request):
+    return await console_mutation(request, 'file')
+
+
+@router.post('/console/resource')
+async def console_resource(request: Request):
+    return await console_mutation(request, 'resource')
+
+
+@router.post('/console/resource/close')
+async def console_resource_close(request: Request):
+    return await console_mutation(request, 'resource_close')

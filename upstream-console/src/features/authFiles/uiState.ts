@@ -1,3 +1,5 @@
+import { getUiStorage } from '@/hosted/storage';
+
 export const AUTH_FILES_SORT_MODES = ['default', 'az', 'priority'] as const;
 export const AUTH_FILES_STATUS_FILTER_MODES = [
   'all',
@@ -48,11 +50,10 @@ const readAuthFilesUiStateFromStorage = (
 };
 
 export const readAuthFilesUiState = (): AuthFilesUiState | null => {
-  if (typeof window === 'undefined') return null;
   try {
     return (
-      readAuthFilesUiStateFromStorage(window.localStorage) ??
-      readAuthFilesUiStateFromStorage(window.sessionStorage)
+      readAuthFilesUiStateFromStorage(getUiStorage('local')) ??
+      readAuthFilesUiStateFromStorage(getUiStorage('session'))
     );
   } catch {
     return null;
@@ -60,23 +61,21 @@ export const readAuthFilesUiState = (): AuthFilesUiState | null => {
 };
 
 export const writeAuthFilesUiState = (state: AuthFilesUiState) => {
-  if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(AUTH_FILES_UI_STATE_KEY, JSON.stringify(state));
+    getUiStorage('local').setItem(AUTH_FILES_UI_STATE_KEY, JSON.stringify(state));
   } catch {
     // ignore
   }
   try {
-    window.sessionStorage.removeItem(AUTH_FILES_UI_STATE_KEY);
+    getUiStorage('session').removeItem(AUTH_FILES_UI_STATE_KEY);
   } catch {
     // ignore
   }
 };
 
 export const readPersistedAuthFilesCompactMode = (): boolean | null => {
-  if (typeof window === 'undefined') return null;
   try {
-    const raw = window.localStorage.getItem(AUTH_FILES_COMPACT_MODE_KEY);
+    const raw = getUiStorage('local').getItem(AUTH_FILES_COMPACT_MODE_KEY);
     if (raw === null) return null;
     return JSON.parse(raw) === true;
   } catch {
@@ -85,9 +84,8 @@ export const readPersistedAuthFilesCompactMode = (): boolean | null => {
 };
 
 export const writePersistedAuthFilesCompactMode = (compactMode: boolean) => {
-  if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(AUTH_FILES_COMPACT_MODE_KEY, JSON.stringify(compactMode));
+    getUiStorage('local').setItem(AUTH_FILES_COMPACT_MODE_KEY, JSON.stringify(compactMode));
   } catch {
     // ignore
   }

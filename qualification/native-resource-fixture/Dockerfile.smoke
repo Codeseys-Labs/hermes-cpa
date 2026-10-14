@@ -1,0 +1,18 @@
+# Disposable network-none native resource smoke image; never a deployment image.
+# Derived from the qualification image (the same base Dockerfile.oauth uses), so
+# it needs no certificate trust. Build with the repository root as context after
+# exporting the fixture artifact (see Dockerfile.fixture):
+#
+#   docker buildx build -f qualification/native-resource-fixture/Dockerfile.smoke \
+#       --build-arg CPA_QUALIFICATION_IMAGE=<immutable image id> \
+#       --build-context native-resource-fixture=./.verification/native-resource-fixture \
+#       -t hermes-cpa-resource-smoke .
+ARG CPA_QUALIFICATION_IMAGE
+FROM ${CPA_QUALIFICATION_IMAGE}
+USER root
+COPY --chown=10001:10001 qualification/native-resource-fixture /opt/q/qualification/native-resource-fixture
+COPY --chown=10001:10001 qualification/resource_smoke.py /opt/q/qualification/resource_smoke.py
+COPY --from=native-resource-fixture --chown=10001:10001 / /opt/q/cache/native-resource-fixture/
+LABEL dev.hermes.qualification="generated native resource plugin smoke; never deploy"
+USER 10001:10001
+ENTRYPOINT ["python", "/opt/q/qualification/resource_smoke.py"]

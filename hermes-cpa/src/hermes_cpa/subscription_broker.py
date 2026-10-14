@@ -1,8 +1,15 @@
-"""Opt-in native inference broker. Upstream key stays in the owner backend.
+"""Opt-in native inference broker. Consumers never receive upstream authority.
 
 The private local control socket issues short-lived, incarnation/epoch-bound
 consumer grants. HTTP accepts those grants, never management credentials.
 No request retries, upstream redirects, renderer endpoints or disk key copies.
+
+Two upstreams exist. The managed owner hosts the broker in its own process
+and forwards over the owned CPA child's private inference channel: no key,
+no public listener, so CPA public config changes (port, TLS, access keys)
+never touch the broker endpoint or enrollment. The explicit foreground
+``subscription-serve`` keeps the literal-loopback origin plus the profile's
+inference key from `.env`.
 """
 from contextlib import contextmanager
 import hashlib
@@ -123,6 +130,13 @@ class _ResponseDeadline:
                     raise TimeoutError('response_deadline')
                 self._sockets.append(connection)
 
+    def register(self, connection):
+        """Own a private upstream socket before connect, so expiry interrupts it."""
+        with self._lock:
+            if self._deadline_expired():
+                raise TimeoutError('response_deadline')
+            self._sockets.append(connection)
+
     def check(self):
         with self._lock:
             if self._deadline_expired():
@@ -144,8 +158,13 @@ class SubscriptionBroker:
         self.home = Path(owner_home)
         if not self.home.is_absolute() or self.home.resolve() != self.home:
             raise ValueError('invalid_owner')
-        # Reuse the existing strict literal-loopback origin validator.
-        self.upstream = CpaAdapter(upstream).base_url
+        if isinstance(upstream, str):
+            # Foreground broker: the strict literal-loopback origin validator.
+            self.upstream, self._private = CpaAdapter(upstream).base_url, None
+        else:
+            # Owner-hosted: the owned child's private inference channel. Its
+            # authority is the supervisor's process identity, never a key.
+            self.upstream, self._private = None, upstream
         self.directory = self.home / 'cpa/run/subscription'
         self.control_path = self.directory / 'supervisor.sock'
         self.port = port
@@ -177,6 +196,9 @@ class SubscriptionBroker:
         return str(path)
 
     def _credential(self):
+        if self._private is not None:
+            # No credential exists to rotate or echo; grants stay epoch/expiry bound.
+            return None, b'private-inference-channel'
         from agent.secret_scope import load_env_file
         try:
             path = self.home / '.env'
@@ -433,6 +455,22 @@ class SubscriptionBroker:
                 with self._lock:
                     self._responses.discard(budget)
 
+    @contextmanager
+    def _upstream(self, method, path, body, key, budget):
+        """One admitted upstream exchange; the budget owns every socket it opens."""
+        timeout = min(10, self.RESPONSE_TIMEOUT)
+        if self._private is not None:
+            with self._private.stream(method, path, body, timeout=timeout,
+                                      register=budget.register) as response:
+                yield response
+            return
+        with httpx.Client(trust_env=False, follow_redirects=False, timeout=timeout) as client:
+            budget.check()
+            with client.stream(method, self.upstream + path, content=body,
+                    headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'},
+                    extensions={'trace': budget.trace}) as response:
+                yield response
+
     def __exit__(self, *args):
         with self._lock:
             self._closed.set()
@@ -559,37 +597,35 @@ class SubscriptionBroker:
                 started = False
                 try:
                     with (broker._response_budget(self.connection) as budget,
-                          httpx.Client(trust_env=False, follow_redirects=False,
-                                       timeout=min(10, broker.RESPONSE_TIMEOUT)) as client):
+                          broker._upstream(self.command, self.path, body, key, budget) as response):
                         budget.check()
-                        with client.stream(self.command, broker.upstream + self.path,
-                                content=body, headers={'Authorization': 'Bearer ' + key,
-                                                       'Content-Type': 'application/json'},
-                                extensions={'trace': budget.trace}) as response:
+                        if response.status_code != 200:
+                            return self._error(502)  # No raw upstream diagnostics or retry.
+                        self.send_response(200)
+                        media = response.headers.get('Content-Type', '').split(';', 1)[0].strip().lower()
+                        self.send_header('Content-Type', 'text/event-stream'
+                                         if media == 'text/event-stream' else 'application/json')
+                        self.send_header('Cache-Control', 'no-store')
+                        # Explicit framing makes aborted/oversize/leaking streams
+                        # incomplete, never a successful EOF-delimited response.
+                        self.send_header('Transfer-Encoding', 'chunked')
+                        self.end_headers()
+                        started = True
+                        total = 0
+                        chunks = response.iter_bytes()
+                        if key is not None:
+                            # Only the foreground path holds a key that could echo.
+                            chunks = _credential_safe_chunks(chunks, key)
+                        for part in chunks:
                             budget.check()
-                            if response.status_code != 200:
-                                return self._error(502)  # No raw upstream diagnostics or retry.
-                            self.send_response(200)
-                            media = response.headers.get('Content-Type', '').split(';', 1)[0].strip().lower()
-                            self.send_header('Content-Type', 'text/event-stream'
-                                             if media == 'text/event-stream' else 'application/json')
-                            self.send_header('Cache-Control', 'no-store')
-                            # Explicit framing makes aborted/oversize/leaking streams
-                            # incomplete, never a successful EOF-delimited response.
-                            self.send_header('Transfer-Encoding', 'chunked')
-                            self.end_headers()
-                            started = True
-                            total = 0
-                            for part in _credential_safe_chunks(response.iter_bytes(), key):
-                                budget.check()
-                                total += len(part)
-                                if total > 8 * 1024 * 1024:
-                                    raise ValueError('response_limit')
-                                self.wfile.write(f'{len(part):x}\r\n'.encode() + part + b'\r\n')
-                                self.wfile.flush()
-                            budget.check()
-                            self.wfile.write(b'0\r\n\r\n')
+                            total += len(part)
+                            if total > 8 * 1024 * 1024:
+                                raise ValueError('response_limit')
+                            self.wfile.write(f'{len(part):x}\r\n'.encode() + part + b'\r\n')
                             self.wfile.flush()
+                        budget.check()
+                        self.wfile.write(b'0\r\n\r\n')
+                        self.wfile.flush()
                 except Exception:
                     if not started:
                         self._error(502)

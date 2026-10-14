@@ -1,4 +1,5 @@
 import { apiClient } from './client';
+import { inheritConfigRevision } from './configRevision';
 
 /** Capture before a config read and check immediately before its dependent write. */
 export function guardConfigConnection(): () => void {
@@ -23,7 +24,13 @@ export async function getConfigValue<T>(path: string, defaultValue: T): Promise<
   try {
     return await apiClient.get<T>(path);
   } catch (error) {
-    if (isMissingConfigValue(error)) return defaultValue;
+    if (isMissingConfigValue(error)) {
+      if (defaultValue !== null && typeof defaultValue === 'object' &&
+          typeof error === 'object' && error !== null && 'data' in error) {
+        inheritConfigRevision(error.data, defaultValue);
+      }
+      return defaultValue;
+    }
     throw error;
   }
 }

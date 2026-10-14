@@ -1,11 +1,10 @@
 """Real supervisor + revised installer + pinned backend, generated assets only."""
-import sys
 import threading
 from pathlib import Path
 
 from hermes_cpa.config_store import ConfigStore
-from hermes_cpa.controller import DeadlineAdapter
 from test_lifecycle_safety import owner, ready
+from test_private_owner_channels import private_owner, put
 import importlib.util
 
 _gate_spec = importlib.util.spec_from_file_location(
@@ -72,21 +71,16 @@ def test_refused_removal_does_not_latch_shutdown(case, owner):
     assert not owner._shutdown and owner.child_process.poll() is None
 
 
-def test_authenticated_http_transaction_restart_persists(owner):
-    owner.command = [sys.executable, str(Path(__file__).with_name('fixture_http_child.py')),
-                     str(owner.port), 'valid']
-    owner.readiness_timeout = 1.
-    adapter = DeadlineAdapter(f'http://127.0.0.1:{owner.port}', 'generated-management')
-    owner.probe = adapter.probe
-    owner.settings.config_path.chmod(0o600)
-    store = ConfigStore(owner.settings.config_path)
-    assert owner.start_child()
-    old = owner.child_process
-    result = store.transact(store.compute_digest(), {'request_retry': 6},
-        expected_generation=owner.generation, owner=owner.transaction_owner(), restart_consent=True)
-    assert result['ok'] and old.poll() is not None, str(result) + str(owner.status())
-    assert owner.status()['management_ready']
-    assert owner.child_process.pid != old.pid
-    fresh_store = ConfigStore(owner.settings.config_path)
-    assert fresh_store.read_config()['routing']['retry']['request-retry'] == 6
-    assert fresh_store.compute_digest() == result['revision']
+def test_private_channel_transaction_restart_persists(tmp_path):
+    with private_owner(tmp_path) as (owner, _):
+        store = ConfigStore(owner.settings.config_path)
+        assert owner.start_child()
+        old = owner.child_process
+        result = store.transact(store.compute_digest(), [put('server/port', 18406)],
+            expected_generation=owner.generation, owner=owner.transaction_owner(), restart_consent=True)
+        assert result['ok'] and old.poll() is not None, str(result) + str(owner.status())
+        assert owner.status()['management_ready']
+        assert owner.child_process.pid != old.pid
+        fresh_store = ConfigStore(owner.settings.config_path)
+        assert fresh_store.read_config()['server']['port'] == 18406
+        assert fresh_store.compute_digest() == result['revision']
