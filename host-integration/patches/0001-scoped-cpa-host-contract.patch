@@ -464,6 +464,122 @@ index f03b0c2..4fb338d 100644
      _known_cmds = (
          set(subparsers.choices.keys()) if hasattr(subparsers, "choices") else set()
      )
+diff --git a/hermes_cli/model_switch_providers.py b/hermes_cli/model_switch_providers.py
+index 891b203..c695091 100644
+--- a/hermes_cli/model_switch_providers.py
++++ b/hermes_cli/model_switch_providers.py
+@@ -103,12 +103,16 @@
+     )
+ 
+     if callable(api_key):
+-        # Let the catalog cache decide whether any token or network I/O is needed.
+-        return cached_fetch_api_models(
+-            api_key, api_url, timeout=timeout, headers=headers, api_mode=api_mode,
+-            fetch_models=lambda: _fetch_picker_live_models(
+-                materialize_probe_api_key(api_key), api_url, native_catalog_provider,
+-                preserve_native_models, headers, timeout, api_mode, cache=False))
++        if cache:
++            # Let the catalog cache decide whether any token or network I/O is needed.
++            return cached_fetch_api_models(
++                api_key, api_url, timeout=timeout, headers=headers, api_mode=api_mode,
++                fetch_models=lambda: _fetch_picker_live_models(
++                    api_key, api_url, native_catalog_provider,
++                    preserve_native_models, headers, timeout, api_mode, cache=False))
++        api_key = materialize_probe_api_key(api_key)
++        if not api_key:
++            return None
+ 
+     candidate_headers = _get_ollama_native_headers(api_url, api_key=api_key)
+ 
+diff --git a/hermes_cli/models.py b/hermes_cli/models.py
+index 704e060..cb91a7a 100644
+--- a/hermes_cli/models.py
++++ b/hermes_cli/models.py
+@@ -2660,15 +2660,21 @@
+ 
+ 
+ def probe_api_models(
+-    api_key: Optional[str], base_url: Optional[str], timeout: float = 5.0,
++    api_key: Any, base_url: Optional[str], timeout: float = 5.0,
+     api_mode: Optional[str] = None, request_headers: Optional[dict[str, str]] = None,
+ ) -> dict[str, Any]:
+     """Probe a ``/models`` endpoint with light URL heuristics (``base`` then ``base±/v1``).
+     ``anthropic_messages`` mode sends ``x-api-key`` + ``anthropic-version`` instead of a bearer; the
+-    ``data[].id`` response shape is identical. ``models`` is None when no candidate answered."""
++    ``data[].id`` response shape is identical. Callable credentials are materialized before HTTP;
++    failed credentials never become anonymous probes. ``models`` is None when no candidate answered."""
+     normalized = (base_url or "").strip().rstrip("/")
+     if not normalized:
+         return _probe_result(None, None, "")
++    if callable(api_key):
++        from agent.command_token_source import materialize_probe_api_key
++        api_key = materialize_probe_api_key(api_key)
++        if not api_key:
++            return _probe_result(None, None, normalized)
+     if _is_github_models_base_url(normalized):
+         models = _fetch_github_models(api_key=api_key, timeout=timeout)
+         return _probe_result(models, COPILOT_MODELS_URL, COPILOT_BASE_URL)
+@@ -2877,7 +2883,7 @@
+ 
+ 
+ def fetch_api_models(
+-    api_key: Optional[str], base_url: Optional[str], timeout: float = 5.0,
++    api_key: Any, base_url: Optional[str], timeout: float = 5.0,
+     api_mode: Optional[str] = None, headers: Optional[dict[str, str]] = None,
+ ) -> Optional[list[str]]:
+     """Fetch the list of available model IDs from the provider's ``/models`` endpoint."""
+@@ -2955,8 +2961,7 @@
+     def _live():
+         if fetch_models is not None:
+             return fetch_models()
+-        from agent.command_token_source import materialize_probe_api_key
+-        return fetch_api_models(materialize_probe_api_key(api_key), base_url, timeout=timeout, api_mode=api_mode, headers=headers)
++        return fetch_api_models(api_key, base_url, timeout=timeout, api_mode=api_mode, headers=headers)
+ 
+     normalized_url = str(base_url or "").strip().rstrip("/").lower()
+     if not normalized_url:  # nothing to key the cache on
+diff --git a/hermes_cli/models_validate.py b/hermes_cli/models_validate.py
+index 6dbcf4a..ef281ff 100644
+--- a/hermes_cli/models_validate.py
++++ b/hermes_cli/models_validate.py
+@@ -781,7 +781,7 @@
+     model_name: str,
+     provider: Optional[str],
+     *,
+-    api_key: Optional[str] = None,
++    api_key: Any = None,
+     base_url: Optional[str] = None,
+     api_mode: Optional[str] = None,
+     headers: Optional[dict[str, str]] = None,
+@@ -793,6 +793,19 @@
+     from hermes_cli import models as _m
+ 
+     requested = (model_name or "").strip()
++    if not requested:
++        return _reject("Model name cannot be empty.")
++    # Native catalog detection also builds auth headers, before the common HTTP probe.
++    if callable(api_key):
++        from agent.command_token_source import materialize_probe_api_key
++        api_key = materialize_probe_api_key(api_key)
++        if not api_key:
++            # Unavailable auth follows the custom unreachable-catalog mode policy,
++            # without retrying either catalog anonymously.
++            return _verdict(
++                api_mode in ("chat_completions", "anthropic_messages"), True, False,
++                f"Note: could not obtain this provider's credential to validate `{requested}`.",
++            )
+     normalized = _m.normalize_provider(provider)
+     if normalized == "openrouter" and base_url and not base_url_host_matches(base_url, "openrouter.ai"):
+         normalized = "custom"
+@@ -800,8 +813,6 @@
+     if normalized == "copilot":
+         lookup = _m.normalize_copilot_model_id(requested, api_key=api_key) or requested
+ 
+-    if not requested:
+-        return _reject("Model name cannot be empty.")
+     req = _Request(requested, lookup, provider, normalized, api_key, base_url, api_mode, headers)
+     for gate, branch in _LADDER:
+         if gate(req):
 diff --git a/hermes_cli/plugin_host.py b/hermes_cli/plugin_host.py
 index 6faa9f4..d8166d5 100644
 --- a/hermes_cli/plugin_host.py
@@ -1763,6 +1879,73 @@ index 0000000..c2b1576
 +                self._revoked.add(key)
 +                return False
 +            return True
+diff --git a/hermes_cli/runtime_provider.py b/hermes_cli/runtime_provider.py
+index 07936db..2ebbd83 100644
+--- a/hermes_cli/runtime_provider.py
++++ b/hermes_cli/runtime_provider.py
+@@ -31,7 +31,7 @@
+ from hermes_cli import config as _config_mod
+ from hermes_cli import models as _models  # attribute access keeps ``hermes_cli.models.<name>`` patches effective
+ from hermes_constants import OPENROUTER_BASE_URL
+-from hermes_cli.providers import determine_api_mode, get_provider, is_actual_route, is_official_openai_host, nous_api_mode
++from hermes_cli.providers import custom_provider_aliases, determine_api_mode, get_provider, is_actual_route, is_official_openai_host, nous_api_mode
+ from utils import base_url_host_matches, base_url_hostname, base_url_path, env_int
+ 
+ 
+@@ -876,14 +876,18 @@
+ 
+ 
+ def _raise_if_provider_disabled(requested_provider: str) -> None:
+-    """Honour ``providers.<name>.enabled: false`` for built-ins too (the custom lookup gate only
+-    covers custom blocks); a typed error lets the fallback chain advance."""
+-    full_cfg = _config_mod.load_config()
++    """Reject disabled providers using the same identities as named custom lookup."""
++    full_cfg = load_config()
+     provs_cfg = full_cfg.get("providers") if isinstance(full_cfg, dict) else None
+-    block = provs_cfg.get(requested_provider) if isinstance(provs_cfg, dict) else None
+-    if isinstance(block, dict) and not _config_mod.is_provider_enabled(block):
+-        raise ValueError(f"provider {requested_provider!r} is disabled in config "
+-                         f"(providers.{requested_provider}.enabled: false)")
++    if not isinstance(provs_cfg, dict):
++        return
++    requested_norm = _normalize_custom_provider_name(requested_provider)
++    for name, block in provs_cfg.items():
++        if not isinstance(block, dict) or _config_mod.is_provider_enabled(block):
++            continue
++        if requested_norm in custom_provider_aliases(str(block.get("name") or name), str(name)):
++            raise ValueError(f"provider {requested_provider!r} is disabled in config "
++                             f"(providers.{name}.enabled: false)")
+ 
+ 
+ def _raise_if_local_alias_missing_endpoint(requested_provider: str, explicit_base_url: Optional[str]) -> None:
+@@ -1108,19 +1112,20 @@
+                                   ) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+     """``resolve_runtime_provider`` plus resolution-time fallback: ``(runtime, fallback_entry_or_None)``.
+ 
+-    Only an ``AuthError`` from the primary (missing/expired credentials, exhausted quota, cooled-down pool)
+-    walks ``get_fallback_chain(config)`` in order and returns the first entry that resolves — the single
+-    resolution-time walker shared by the gateway and oneshot. ``ValueError``/other errors are genuine
+-    misconfiguration (unknown ``--provider`` ...) and propagate unchanged, so a typo is never silently
+-    rerouted onto a provider the operator did not ask for. When every entry fails, the *primary* error is
+-    re-raised: a fallback entry's failure is not what the operator configured first (#81209). The entry's
+-    ``model`` is the model the caller must send.
++    Only a credential-related ``AuthError`` from the primary (missing/expired credentials, exhausted
++    quota, cooled-down pool) walks ``get_fallback_chain(config)`` in order and returns the first entry
++    that resolves. Invalid-provider ``AuthError`` and ``ValueError`` are misconfiguration and propagate
++    unchanged, so a removed named provider or typo is never silently rerouted.
++    When every fallback fails, the primary error is re-raised (#81209).
++    The entry's ``model`` is the model the caller must send.
+     """
+     from hermes_cli.auth import AuthError, primary_failure_wording
+     try:
+         return resolve_runtime_provider(requested=requested, target_model=target_model,
+                                         explicit_base_url=explicit_base_url, explicit_api_key=explicit_api_key), None
+     except AuthError as primary_exc:
++        if primary_exc.code == "invalid_provider":
++            raise
+         from hermes_cli.fallback_config import effective_runtime_provider, get_fallback_chain, resolve_entry_api_key
+         for entry in get_fallback_chain(config):
+             provider = (entry.get("provider") or "").strip().lower()
 diff --git a/hermes_cli/runtime_provider_custom.py b/hermes_cli/runtime_provider_custom.py
 index 698f0ed..2410f0a 100644
 --- a/hermes_cli/runtime_provider_custom.py
@@ -1870,6 +2053,168 @@ index 0906d2d..2e01d1f 100644
  
  
      # ── subcommand boundary ──────────────────────────────────────────────
+diff --git a/tests/hermes_cli/test_model_validation.py b/tests/hermes_cli/test_model_validation.py
+index 53038c1..58bc71b 100644
+--- a/tests/hermes_cli/test_model_validation.py
++++ b/tests/hermes_cli/test_model_validation.py
+@@ -207,6 +207,123 @@
+         assert probe["models"] == ["gpt-5.4", "claude-sonnet-4.6"]
+         assert probe["resolved_base_url"] == "https://api.githubcopilot.com"
+         assert probe["used_fallback"] is False
++
++
++class TestCallableModelCredentials:
++    @staticmethod
++    def _request(entrypoint, credential, base_url, *, api_mode=None):
++        from hermes_cli.models import cached_fetch_api_models
++
++        if entrypoint == "probe":
++            return probe_api_models(credential, base_url, api_mode=api_mode)["models"]
++        if entrypoint == "fetch":
++            return fetch_api_models(credential, base_url, api_mode=api_mode)
++        if entrypoint == "cached":
++            return cached_fetch_api_models(credential, base_url, api_mode=api_mode, force_refresh=True)
++        if entrypoint == "picker":
++            from hermes_cli.model_switch_providers import _fetch_picker_live_models
++            return _fetch_picker_live_models(credential, base_url, "custom", False, api_mode=api_mode)
++        return validate_requested_model(
++            "generated-model", "custom:cpa", api_key=credential, base_url=base_url, api_mode=api_mode,
++        )
++
++    @pytest.mark.parametrize("entrypoint", ["probe", "fetch", "cached", "validate"])
++    @pytest.mark.parametrize("api_mode", ["chat_completions", "anthropic_messages"])
++    def test_command_credential_reaches_http_as_token(self, entrypoint, api_mode):
++        from agent.command_token_source import CommandTokenSource
++
++        credential = CommandTokenSource("generated-test-command", "test-provider")
++        response = MagicMock()
++        response.__enter__.return_value = response
++        response.read.return_value = b'{"data":[{"id":"generated-model"}]}'
++        with patch("agent.command_token_source._mint", return_value=("generated-grant", 0)) as mint, \
++             patch("hermes_cli.models._urlopen_model_catalog_request", return_value=response) as request:
++            result = self._request(entrypoint, credential, "http://127.0.0.1:19181/v1", api_mode=api_mode)
++
++        mint.assert_called_once()
++        request.assert_called_once()
++        headers = {key.lower(): value for key, value in request.call_args.args[0].header_items()}
++        if api_mode == "anthropic_messages":
++            assert headers["x-api-key"] == "generated-grant"
++            assert headers["anthropic-version"] == "2023-06-01"
++            assert "authorization" not in headers
++        else:
++            assert headers["authorization"] == "Bearer generated-grant"
++        if entrypoint == "validate":
++            assert result["accepted"] and result["recognized"]
++        else:
++            assert result == ["generated-model"]
++
++    @pytest.mark.parametrize("entrypoint", ["probe", "fetch", "cached", "picker", "validate"])
++    @pytest.mark.parametrize("failure", ["raises", "empty", "non-string"])
++    def test_failed_command_credential_never_probes_anonymously(self, entrypoint, failure):
++        from agent.command_token_source import CommandTokenError, CommandTokenSource
++
++        credential = CommandTokenSource("generated-test-command", "test-provider")
++        mint_options = (
++            {"side_effect": CommandTokenError("generated credential failure")}
++            if failure == "raises" else {"return_value": (" " if failure == "empty" else None, 0)}
++        )
++        with patch("agent.command_token_source._mint", **mint_options) as mint, \
++             patch("hermes_cli.models._urlopen_model_catalog_request") as request, \
++             patch("hermes_cli.models_local.probe_ollama_local_models") as native_request:
++            result = self._request(entrypoint, credential, "http://127.0.0.1:11434/v1")
++
++        mint.assert_called_once()
++        request.assert_not_called()
++        native_request.assert_not_called()
++        if entrypoint == "validate":
++            assert (result["accepted"], result["persist"], result["recognized"]) == (False, True, False)
++        else:
++            assert result is None
++
++    @pytest.mark.parametrize("api_mode,accepted", [
++        ("chat_completions", True),
++        ("anthropic_messages", True),
++        ("codex_responses", False),
++        (None, False),
++    ])
++    @pytest.mark.parametrize("failure", ["raises", "empty", "none", "non-string"])
++    def test_failed_callable_validation_preserves_mode_policy(self, api_mode, accepted, failure):
++        credential = MagicMock(
++            side_effect=RuntimeError("generated credential failure"),
++        ) if failure == "raises" else MagicMock(
++            return_value={"empty": " ", "none": None, "non-string": 42}[failure],
++        )
++        with patch("hermes_cli.models._urlopen_model_catalog_request") as request, \
++             patch("hermes_cli.models_local.probe_ollama_local_models") as native_request:
++            result = self._request(
++                "validate", credential, "http://127.0.0.1:11434/v1", api_mode=api_mode,
++            )
++
++        assert (result["accepted"], result["persist"], result["recognized"]) == (accepted, True, False)
++        credential.assert_called_once_with()
++        request.assert_not_called()
++        native_request.assert_not_called()
++
++    @pytest.mark.parametrize("credential", [None, ""])
++    def test_anonymous_local_catalog_remains_available(self, credential):
++        response = MagicMock()
++        response.__enter__.return_value = response
++        response.read.return_value = b'{"data":[]}'
++        with patch("hermes_cli.models._urlopen_model_catalog_request", return_value=response) as request:
++            result = probe_api_models(credential, "http://127.0.0.1:19181/v1")
++
++        assert result["models"] == []
++        request.assert_called_once()
++        assert request.call_args.args[0].get_header("Authorization") is None
++
++    def test_plain_callable_can_return_an_empty_authenticated_catalog(self):
++        credential = MagicMock(return_value=" generated-grant ")
++        response = MagicMock()
++        response.__enter__.return_value = response
++        response.read.return_value = b'{"data":[]}'
++        with patch("hermes_cli.models._urlopen_model_catalog_request", return_value=response) as request:
++            result = probe_api_models(credential, "http://127.0.0.1:19181/v1")
++
++        assert result["models"] == []
++        credential.assert_called_once_with()
++        assert request.call_args.args[0].get_header("Authorization") == "Bearer generated-grant"
+ 
+ 
+ class TestCopilotNormalization:
+@@ -751,24 +868,6 @@
+         )
+         assert result["accepted"] is True
+ 
+-    def test_non_nous_provider_does_not_consult_portal_feed(self):
+-        """This fallback tier is Nous-specific; a non-Nous provider must
+-        not have its rejection changed by (or trigger a call to) the Nous
+-        Portal feed."""
+-        probe_payload = {
+-            "models": ["some/other-model"],
+-            "probed_url": "https://api.example.com/v1/models",
+-            "resolved_base_url": "https://api.example.com/v1",
+-            "suggested_base_url": None,
+-            "used_fallback": False,
+-        }
+-        with patch("hermes_cli.models.fetch_api_models", return_value=["some/other-model"]), \
+-             patch("hermes_cli.models.probe_api_models", return_value=probe_payload), \
+-             patch("hermes_cli.models.fetch_nous_recommended_models") as mock_portal, \
+-             patch("hermes_cli.models._model_in_provider_catalog", return_value=False):
+-            result = validate_requested_model("inclusionai/ling-3.0-flash:free", "openrouter")
+-        mock_portal.assert_not_called()
+-        assert result["accepted"] is False
+ 
+ 
+ # -- validate — custom endpoint fallback when /models is unreachable (#12220) --
+@@ -792,7 +891,7 @@
+     @pytest.mark.parametrize("api_mode", [None, "codex_responses"])
+     def test_unreachable_catalog_still_rejects_other_api_modes(self, api_mode):
+         result = self._validate("my-proxy-model", "custom", models=None, api_mode=api_mode)
+-        assert result["accepted"] is False
++        assert (result["accepted"], result["persist"], result["recognized"]) == (False, True, False)
+         assert "was not saved" in result["message"]
+         # A reachable catalog keeps authoritative validation regardless of mode.
+         assert self._validate("my-model", "custom", models=["my-model"], api_mode="chat_completions")["recognized"] is True
 diff --git a/tests/hermes_cli/test_plugin_asgi_lifecycle.py b/tests/hermes_cli/test_plugin_asgi_lifecycle.py
 new file mode 100644
 index 0000000..dd23348
@@ -3169,6 +3514,129 @@ index 0000000..2a18d12
 +        web_server.app.router.routes[:] = routes
 +        web_server._dashboard_plugins_cache = None
 +    assert all(not host.alive for host in hosts)
+diff --git a/tests/hermes_cli/test_runtime_provider_resolution.py b/tests/hermes_cli/test_runtime_provider_resolution.py
+index 62677f1..cc1d1c8 100644
+--- a/tests/hermes_cli/test_runtime_provider_resolution.py
++++ b/tests/hermes_cli/test_runtime_provider_resolution.py
+@@ -6,6 +6,118 @@
+ import pytest
+ 
+ from hermes_cli import runtime_provider as rp
++
++
++@pytest.fixture
++def named_provider_config(tmp_path, monkeypatch):
++    """Use the real config loader with a disposable named provider and fallback."""
++    from hermes_cli import config as config_mod
++
++    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
++    config_mod._LOAD_CONFIG_CACHE.clear()
++    config_mod._RAW_CONFIG_CACHE.clear()
++    config = {
++        "model": {"provider": "custom:cpa", "default": "primary-model"},
++        "providers": {
++            "cpa": {"name": "CPA Gateway", "api": "http://127.0.0.1:19181/v1",
++                    "api_key": "generated-primary-key", "enabled": False},
++        },
++        "fallback_providers": [
++            {"provider": "custom", "model": "fallback-model",
++             "base_url": "http://127.0.0.1:19182/v1", "api_key": "generated-fallback-key"},
++        ],
++    }
++    yield config, tmp_path / "config.yaml"
++    config_mod._LOAD_CONFIG_CACHE.clear()
++    config_mod._RAW_CONFIG_CACHE.clear()
++
++
++@pytest.mark.parametrize("requested", [None, "cpa", " CUSTOM:CPA ", "CPA Gateway", "custom:cpa-gateway"])
++@pytest.mark.parametrize("explicit_overrides", [False, True])
++def test_disabled_named_provider_never_enters_fallback(named_provider_config, requested, explicit_overrides):
++    config, config_path = named_provider_config
++    config_path.write_text(json.dumps(config), encoding="utf-8")
++    overrides = (
++        {"explicit_base_url": "http://127.0.0.1:19183/v1", "explicit_api_key": "generated-override-key"}
++        if explicit_overrides else {}
++    )
++
++    with pytest.raises(ValueError, match="disabled"):
++        rp.resolve_runtime_with_fallback(config, requested=requested, **overrides)
++
++
++@pytest.mark.parametrize("requested", [None, "custom:cpa", "cpa", "misspelled-provider"])
++@pytest.mark.parametrize("explicit_overrides", [False, True])
++def test_removed_or_unknown_named_provider_never_enters_fallback(named_provider_config, requested, explicit_overrides):
++    config, config_path = named_provider_config
++    config["providers"].clear()
++    config_path.write_text(json.dumps(config), encoding="utf-8")
++    overrides = (
++        {"explicit_base_url": "http://127.0.0.1:19183/v1", "explicit_api_key": "generated-override-key"}
++        if explicit_overrides else {}
++    )
++
++    with pytest.raises(rp.AuthError) as error:
++        rp.resolve_runtime_with_fallback(config, requested=requested, **overrides)
++
++    assert error.value.code == "invalid_provider"
++
++
++def test_named_provider_without_endpoint_never_enters_fallback(named_provider_config):
++    config, config_path = named_provider_config
++    config["providers"]["cpa"] = {"enabled": True}
++    config_path.write_text(json.dumps(config), encoding="utf-8")
++
++    with pytest.raises(rp.AuthError) as error:
++        rp.resolve_runtime_with_fallback(config, requested="custom:cpa")
++
++    assert error.value.code == "invalid_provider"
++
++
++@pytest.mark.parametrize("code", ["missing_api_key", "token_expired"])
++def test_credential_failure_still_resolves_configured_fallback(named_provider_config, monkeypatch, code):
++    config, config_path = named_provider_config
++    config["model"]["provider"] = "deepseek"
++    config_path.write_text(json.dumps(config), encoding="utf-8")
++    monkeypatch.setattr(rp, "load_pool", lambda _provider: SimpleNamespace(has_credentials=lambda: False))
++
++    def missing_credentials(_provider):
++        raise rp.AuthError("Generated credential failure", provider="deepseek", code=code)
++
++    monkeypatch.setattr(rp, "resolve_api_key_provider_credentials", missing_credentials)
++
++    runtime, fallback = rp.resolve_runtime_with_fallback(config, requested="deepseek")
++
++    assert fallback == config["fallback_providers"][0]
++    assert runtime["base_url"] == fallback["base_url"]
++    assert runtime["api_key"] == fallback["api_key"]
++
++
++@pytest.mark.parametrize("requested", [None, "cpa", "custom:cpa", "custom:cpa-gateway"])
++def test_enabled_named_command_provider_keeps_its_identity(named_provider_config, requested):
++    from agent.command_token_source import CommandTokenSource
++
++    config, config_path = named_provider_config
++    config["providers"]["cpa"]["enabled"] = True
++    config["providers"]["cpa"]["key_cmd"] = "generated-test-command"
++    config_path.write_text(json.dumps(config), encoding="utf-8")
++
++    runtime, fallback = rp.resolve_runtime_with_fallback(config, requested=requested)
++
++    assert fallback is None
++    assert runtime["provider"] == "custom"
++    assert runtime["requested_provider"] == (requested or "custom:cpa")
++    assert runtime["base_url"] == config["providers"]["cpa"]["api"]
++    assert isinstance(runtime["api_key"], CommandTokenSource)
++
++
++def test_disabled_builtin_provider_never_enters_fallback(named_provider_config):
++    config, config_path = named_provider_config
++    config["providers"]["deepseek"] = {"enabled": False}
++    config_path.write_text(json.dumps(config), encoding="utf-8")
++
++    with pytest.raises(ValueError, match="disabled"):
++        rp.resolve_runtime_with_fallback(config, requested="deepseek")
+ 
+ 
+ def test_configured_api_key_provider_without_key_fails_closed(monkeypatch):
 diff --git a/tools/delegate_tool_config.py b/tools/delegate_tool_config.py
 index 07d4779..8b9331e 100644
 --- a/tools/delegate_tool_config.py

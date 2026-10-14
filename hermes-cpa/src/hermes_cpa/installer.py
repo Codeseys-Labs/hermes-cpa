@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 
 from .process_owner import require_platform, private_directory, private_open
 from .config_store import ConfigStore
+from .authorization import AuthorizationDeadline
 
 EXPECTED_TAR_SHA = 'a40164e25a60869df2c489702383d4e64dc27bb08eaafd7b04a101a2f5cfc625'
 EXPECTED_BIN_SHA = '95435293c56e856db7d70b377d30b2b2c00e32ff1c06c41ae46758a9f6febdee'
@@ -110,7 +111,7 @@ class CpaInstaller:
         self.package_root = Path(package_root or Path(__file__).resolve().parents[2])
         self.isolated_authorization = isolated_authorization
 
-    def _authorize_isolated_candidate(self):
+    def _authorize_isolated_candidate(self, manifest_content=None):
         """Explicit backend-only, home/package/digest-bound disposable test permit.
 
         No implicit file discovery and no renderer path input. This never edits
@@ -118,6 +119,8 @@ class CpaInstaller:
         """
         import time
         try:
+            if manifest_content is None:
+                manifest_content = bounded_file(self.package_root / 'compatibility.json', 65536)
             path = Path(self.isolated_authorization)
             raw = bounded_file(path, 16384)
             with os.fdopen(private_open(path), 'rb') as stream:
@@ -128,12 +131,42 @@ class CpaInstaller:
                     record.get('purpose') != 'isolated-candidate-test' or
                     record.get('home') != str(self.settings.home.resolve()) or
                     record.get('package_root') != str(self.package_root.resolve()) or
-                    record.get('manifest_sha256') != digest(self.package_root / 'compatibility.json') or
+                    record.get('manifest_sha256') != hashlib.sha256(manifest_content).hexdigest() or
                     type(record.get('expires_at')) not in (int, float) or
                     not time.time() < record['expires_at'] <= time.time() + 86400):
                 raise ValueError('invalid_authorization')
+            return record['expires_at']
         except Exception as exc:
             raise ValueError('isolated_authorization_invalid') from exc
+
+    @staticmethod
+    def _release_accepted(manifest):
+        return (manifest.get('candidate_status') == 'accepted' and
+                manifest.get('adr_status') == 'Accepted' and
+                isinstance(manifest.get('tested_minimum_hermes'), str) and
+                re.fullmatch(r'\d+\.\d+\.\d+', manifest['tested_minimum_hermes']) is not None)
+
+    def _release_authorization(self, manifest, manifest_content):
+        if self._release_accepted(manifest):
+            return None
+        if self.isolated_authorization is None:
+            raise ValueError('unaccepted_release')
+        return self._authorize_isolated_candidate(manifest_content)
+
+    def runtime_authorization(self):
+        """Capture admission once; executable integrity stays on launch checks."""
+        require_platform()
+        raw = bounded_file(self.package_root / 'compatibility.json', 65536)
+        manifest = json.loads(raw)
+        if not isinstance(manifest, dict):
+            raise ValueError('invalid_manifest')
+        expiry = self._release_authorization(manifest, raw)
+        if expiry is None:
+            return None
+        authorization = AuthorizationDeadline(expiry)
+        if not authorization.current():
+            raise ValueError('isolated_authorization_invalid')
+        return authorization
 
     def verify_release(self):
         """Release gate, pair, console and notices without an executable.
@@ -145,18 +178,13 @@ class CpaInstaller:
 
     def _verify_content(self, content):
         require_platform()
-        manifest = json.loads(bounded_file(self.package_root / 'compatibility.json', 65536))
+        raw = bounded_file(self.package_root / 'compatibility.json', 65536)
+        manifest = json.loads(raw)
         if not isinstance(manifest, dict):
             raise ValueError('invalid_manifest')
         # Artifact compatibility is not release approval. Missing metadata and
         # a Proposed ADR fail closed, including initial offline installation.
-        if (manifest.get('candidate_status') != 'accepted' or
-                manifest.get('adr_status') != 'Accepted' or
-                not isinstance(manifest.get('tested_minimum_hermes'), str) or
-                not re.fullmatch(r'\d+\.\d+\.\d+', manifest['tested_minimum_hermes'])):
-            if self.isolated_authorization is None:
-                raise ValueError('unaccepted_release')
-            self._authorize_isolated_candidate()
+        self._release_authorization(manifest, raw)
         pairs = manifest.get('supported_pairs', [])
         if not isinstance(pairs, list) or any(not isinstance(p, dict) for p in pairs):
             raise ValueError('invalid_manifest')

@@ -467,6 +467,9 @@ def build_owner(settings, package_root, *, secret_resolver=None, adapter_factory
         mode, port = options.get('mode', 'external'), options.get('managed_port', 8318)
         if mode != 'managed' or not policy():
             raise ValueError('policy_locked')
+        installer = CpaInstaller(settings, package_root,
+                                 isolated_authorization=isolated_authorization)
+        authorization = installer.runtime_authorization()
         from .secret_resolver import ProfileSecretResolver, native_scope
         scope = native_scope(settings)
         resolver = ProfileSecretResolver(settings.home)
@@ -493,14 +496,14 @@ def build_owner(settings, package_root, *, secret_resolver=None, adapter_factory
         broker_port = options.get('broker_port')
         if type(broker_port) is int and is_default_home(settings.home):
             from .subscription_broker import SubscriptionBroker
-            broker = lambda: SubscriptionBroker(settings.home, origin, port=broker_port)
+            broker = lambda: SubscriptionBroker(settings.home, origin, port=broker_port,
+                                                 authorization=authorization)
         return CpaSupervisor(settings, mode=mode, port=port, policy=policy,
             probe=adapter.probe, transaction=transaction,
-            compatibility_check=CpaInstaller(settings, package_root,
-                isolated_authorization=isolated_authorization).verify_pair,
-            lifetime=lifetime, broker=broker)
+            compatibility_check=installer.verify_pair,
+            lifetime=lifetime, broker=broker, authorization=authorization)
     except Exception:
         # Start remains unavailable; reads can report failure without exposing vault errors.
-        owner = CpaSupervisor(settings, mode='managed', policy=policy, lifetime=lifetime)
+        owner = CpaSupervisor(settings, mode='managed', policy=lambda: False, lifetime=lifetime)
         owner._transition(LifecycleState.FAILED, 'secret_or_policy_unavailable')
         return owner

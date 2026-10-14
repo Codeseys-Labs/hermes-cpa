@@ -1,0 +1,16 @@
+**
+!backend/
+backend/**
+!backend/*.py
+!backend/fixtures/
+backend/fixtures/**
+!backend/fixtures/*.json
+!gates/
+gates/**
+!gates/*.py
+!integration/
+integration/**
+!integration/*.py
+!unit/
+unit/**
+!unit/*.py

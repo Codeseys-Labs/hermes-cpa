@@ -8,7 +8,7 @@ Explicit managed `hermes cpa setup --consent` starts CPA and the broker, enrolls
 the provider and remembers autostart by default. Neither path migrates upstream
 credentials or installs a system service.
 
-Observed generated-fixture commands (run1327):
+Earlier exploratory commands (run1327, retained for context):
 
     python -m hermes_cpa.cli subscription-serve --upstream http://127.0.0.1:<fixture-port> --port 0 --consent
     python -m hermes_cpa.subscription_client --control <default-home>/cpa/run/subscription/supervisor.sock
@@ -22,8 +22,9 @@ Hermes providers.<name>.key_cmd can invoke this helper with the consumer's bound
 home; base_url is the printed broker URL including /v1. No static api_key/key_env
 is needed in the consumer. The isolated host patch honors zero TTL by invoking
 the helper per request; older hosts cache it and are not supported for this flow.
-The actual resolve_runtime_provider -> key_cmd subprocess -> OpenAI SDK -> broker
--> generated upstream path was exercised, including revoke between calls.
+The [repeatable qualifier](../qualification/provider_smoke.py) exercises actual
+resolve_runtime_provider -> key_cmd subprocess -> OpenAI SDK -> broker -> pinned
+CPA 8.0.21 -> generated loopback upstream, including ordinary and SSE inference.
 
 Observed native provider enrollment (isolated generated fixture):
 
@@ -34,20 +35,24 @@ using the installed helper's interpreter/source path and key_cmd (no static key)
 It authenticates GET /v1/models through the broker, records every returned model
 ID with discover_models enabled, preserves the default model and unrelated config,
 and refuses a conflicting/disabled cpa entry or discovery failure. Select the
-custom:cpa provider in native Hermes. Generated integration exercises native
-runtime resolution, SDK model listing and each discovered model's chat route.
-Delegate per-task credential routing and shared CLI/Desktop picker inventory are
-now exercised against generated upstream HTTP with two independently enrolled
-profiles. The existing catalog cache automatically revalidates on expiry (normal
-fresh window one hour); Refresh Models forces discovery without reenrollment.
-Generated tests age the cache and verify newly added and removed IDs on the next
-normal picker build, then send chat calls through the per-task resolved routes.
-Additional generated tests drive the native CLI curses provider/model picker with
-PTY keyboard input, persist the selected model and complete its SDK chat. Two
-fresh enrolled profiles also complete real AIAgent parent -> delegate_task ->
-child AIAgent -> attributed transcript/result -> parent loops over HTTP/SSE.
-The deterministic fixture emits the tool call; no SDK or dispatch is replaced.
-This qualifies routing, not live model quality or rendered Desktop E2E.
+custom:cpa provider in native Hermes. The existing catalog cache automatically
+revalidates on expiry (normal fresh window one hour); Refresh Models forces
+discovery without reenrollment. The checked-in qualifier uses the public
+one-second TTL override with real elapsed time, then verifies that the normal
+picker consumes the refreshed cache. It does not edit cache files, change the
+production TTL or rewrite the enrollment snapshot.
+
+The qualifier verifies added and removed IDs, inference with the new model,
+distinct request grants, and unchanged enrollment during discovery. Disable and
+remove each start from independently proven live grants; a generated fixture
+re-enable separates them. Held SDK calls, captured grants and fresh named-provider
+resolution are denied afterward, including with a configured generated fallback.
+The upstream receives no retirement or fallback traffic.
+
+Earlier exploratory notes described two-profile delegate routing, a PTY picker
+and full parent/delegate agent turns. Those artifacts are not part of the
+checked-in qualifier and are not claimed as current repeatable evidence. The
+current proof is the registered runtime/SDK path, not full agent or Desktop E2E.
 Production installation remains unverified. Enrollment does not start the broker,
 enable disabled providers, change upstream credentials, or migrate manual entries.
 
@@ -81,6 +86,15 @@ helper raises without substituting ambient credentials. Rotation invalidates old
 grants (401); the next helper invocation obtains a new epoch-bound grant. Explicit
 revoke() alone still permits fresh issuance; provider-disable is durable retirement.
 
+Managed candidate owners capture one immutable authorization deadline, bounded
+by wall and monotonic clocks, and share it with their broker. Expiry denies new
+grants and HTTP admissions, bounds active response budgets, and stops the owned
+CPA and broker. Failed streams do not receive successful terminal framing.
+Changing or renewing the permit file does not extend a running owner; explicitly
+relaunch the owner to capture a newly issued permit. No automatic renewal occurs.
+Accepted releases have no candidate lease. Standalone external forwarding is not
+a managed candidate owner and does not acquire one.
+
 The broker reads only HERMES_CPA_INFERENCE_KEY from the explicit owner's local
 .env via the existing tokenizer. It deliberately does NOT use ambient,
 management, another worker, external vault or managed-overlay fallback. Source
@@ -109,7 +123,8 @@ types are returned; arbitrary upstream Content-Type parameters are not forwarded
 This is not a general filter for encoded secrets or unknown provider credentials.
 
 Limits: 32 connection threads, 1MiB input, 8MiB response, 10s socket/inactivity
-bounds, and a 300s total response-I/O deadline starting before connection setup.
+bounds, and a 300s total response-I/O deadline starting before connection setup,
+capped by the captured candidate lease when present.
 One timer per admitted request shuts down captured upstream/downstream sockets,
 including trickling response headers/body and blocked slow-consumer writes. The
 HTTP trace extension captures the upstream socket before headers arrive; connect

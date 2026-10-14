@@ -1,13 +1,16 @@
 """Generated harmless processes; these do not assert real CPA compatibility."""
+from contextlib import contextmanager
 import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 from types import SimpleNamespace
 
 import pytest
 
+from hermes_cpa import authorization
 from hermes_cpa.settings import CpaSettings
 from hermes_cpa.supervisor import CpaSupervisor
 from hermes_cpa.controller import CpaController
@@ -23,8 +26,8 @@ def unavailable(timeout=1):
                            inference_configured=None, reason="unavailable")
 
 
-@pytest.fixture
-def owner(tmp_path):
+@contextmanager
+def harmless_owner(tmp_path, *, authorization=None):
     settings = CpaSettings(tmp_path)
     settings.ensure_directories()
     settings.config_path.write_text('server: {host: 127.0.0.1, port: 8318}\n')
@@ -33,12 +36,34 @@ def owner(tmp_path):
         port = s.getsockname()[1]
     sup = CpaSupervisor(settings, mode='managed', port=port, probe=unavailable,
                         policy=lambda: True, readiness_timeout=.25,
+                        authorization=authorization,
                         command=[sys.executable, '-c', 'import time; time.sleep(30)'])
     assert sup.acquire_lock()
-    yield sup
-    child = sup.child_process
-    sup.cleanup()
-    assert child is None or child.poll() is not None
+    try:
+        yield sup
+    finally:
+        child = sup.child_process
+        sup.cleanup()
+        if sup._worker is not None:
+            sup._worker.join(2)
+            assert not sup._worker.is_alive()
+        assert child is None or child.poll() is not None
+
+
+@pytest.fixture
+def owner(tmp_path):
+    with harmless_owner(tmp_path) as supervisor:
+        yield supervisor
+
+
+@pytest.fixture
+def leased_owner(tmp_path, monkeypatch):
+    clock = SimpleNamespace(wall=time.time(), ticks=time.monotonic())
+    monkeypatch.setattr(authorization, 'time', SimpleNamespace(
+        time=lambda: clock.wall, monotonic=lambda: clock.ticks))
+    deadline = authorization.AuthorizationDeadline(clock.wall + 60)
+    with harmless_owner(tmp_path, authorization=deadline) as supervisor:
+        yield supervisor, clock
 
 
 def test_no_ready_on_popen_and_timeout_reaps(owner):
@@ -190,12 +215,121 @@ def test_owner_view_revalidates_generation_and_shutdown(owner):
 
 
 def test_stop_escalates_and_reaps(owner):
+    marker = owner.settings.instances_dir / 'sigterm-ready'
     owner.command = [sys.executable, '-c',
-                     'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)']
-    owner.probe = ready
+                     'import signal,time; from pathlib import Path; '
+                     'signal.signal(signal.SIGTERM, signal.SIG_IGN); '
+                     f'Path({str(marker)!r}).touch(); time.sleep(30)']
+    owner.probe = lambda timeout=1: ready(timeout) if marker.is_file() else unavailable(timeout)
+    owner.readiness_timeout = 2
     assert owner.start_child()
-    time.sleep(.15)
     started = time.monotonic()
     assert owner.stop_child(grace_period=.1)
     assert time.monotonic() - started < 2
     assert owner.child_process.returncode == -9
+
+
+def test_expired_authorization_denies_start_without_launch(leased_owner):
+    owner, clock = leased_owner
+    owner.probe = ready
+    clock.ticks += 60
+    assert not owner.start_child()
+    assert owner.child_process is None
+
+
+def test_authorization_expiring_during_probe_never_reports_ready(leased_owner):
+    owner, clock = leased_owner
+
+    def expiring_probe(timeout):
+        clock.ticks += 60
+        return ready()
+
+    owner.probe = expiring_probe
+    assert not owner.start_child()
+    assert not owner.status()['management_ready']
+    assert owner.child_process.poll() is not None
+
+
+def test_expiry_reaps_child_without_transient_policy_grace(leased_owner):
+    owner, clock = leased_owner
+    owner.probe = ready
+    assert owner.start_child()
+    child = owner.child_process
+
+    def unreadable_policy():
+        raise OSError('generated unavailable policy')
+
+    owner.policy = unreadable_policy
+    assert not owner.watchdog()
+    assert child.poll() is None  # Ordinary policy read failure still gets its grace.
+    clock.wall -= 3600
+    clock.ticks += 60
+    assert not owner.watchdog()
+    assert child.poll() is not None
+    owner.policy = lambda: True
+    assert not owner.start_child()
+
+
+def test_accepted_operation_cannot_start_after_authorization_expires(leased_owner):
+    owner, clock = leased_owner
+    owner.probe = ready
+    # Queue the operation behind an unrelated mutation, then expire its lease.
+    with owner.mutation_gate:
+        submitted = owner.submit(dict(action='start', request_id='lease-expiry',
+                                      expected_generation=owner.generation))
+        assert submitted['ok']
+        clock.ticks += 60
+    until = time.monotonic() + 2
+    while True:
+        result = owner.dispatch({'cmd': 'operation', 'args': {'operation_id': 'lease-expiry'}})
+        if result['state'] in ('succeeded', 'failed') or time.monotonic() >= until:
+            break
+        time.sleep(.01)
+    assert result['state'] == 'failed'
+    assert result['code'] == 'POLICY_LOCKED'
+    assert owner.child_process is None
+
+
+def test_ipc_accept_tick_reaps_before_policy_watchdog_interval(leased_owner):
+    owner, clock = leased_owner
+    owner.probe = ready
+    assert owner.start_child()
+    child = owner.child_process
+    checked = threading.Event()
+    owner.policy = lambda: checked.set() or True
+    owner.watchdog_interval = 30
+    failures = []
+
+    def serve():
+        try:
+            owner.run_ipc()
+        except Exception as exc:
+            failures.append(exc)
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        assert checked.wait(2), 'owner never reached its initial policy check'
+        controller = CpaController(owner.settings, mode='managed', timeout=2)
+        assert controller.snapshot()['management_ready']
+        # A served request proves the initial policy/health pass has completed.
+        clock.ticks += 60
+        thread.join(3)
+        assert not thread.is_alive(), 'expiry waited for the policy watchdog interval'
+        assert not failures
+        assert child.poll() is not None
+        assert not owner.settings.socket_path.exists()
+    finally:
+        owner.running = False
+        thread.join(3)
+
+
+def test_no_candidate_lease_preserves_ordinary_owner_lifetime(owner):
+    owner.probe = ready
+    assert owner.start_child()
+    child = owner.child_process
+    assert owner.watchdog()
+    assert owner.status()['management_ready']
+    assert child.poll() is None
+    assert owner.stop_child()
+    assert child.poll() is not None

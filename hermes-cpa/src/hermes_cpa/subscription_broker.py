@@ -71,13 +71,17 @@ def _credential_safe_chunks(chunks, credential):
 class _ResponseDeadline:
     """One timer per admitted request interrupts both sides of blocked I/O."""
 
-    def __init__(self, downstream, timeout):
-        self.deadline = time.monotonic() + timeout
+    def __init__(self, downstream, timeout, authorization=None):
+        now = time.monotonic()
+        self.authorization = authorization
+        if authorization is not None:
+            timeout = min(timeout, authorization.remaining())
+        self.deadline = now + timeout
         self._lock = threading.Lock()
         self._sockets = [downstream]
         self._done = False
         self._expired = False
-        self._timer = threading.Timer(timeout, self._expire)
+        self._timer = threading.Timer(max(0., self.deadline - time.monotonic()), self._expire)
         self._timer.daemon = True
 
     def __enter__(self):
@@ -99,7 +103,13 @@ class _ResponseDeadline:
             for connection in self._sockets:
                 self._shutdown(connection)
 
+    def _deadline_expired(self):
+        return (self._expired or time.monotonic() >= self.deadline or
+                (self.authorization is not None and not self.authorization.current()))
+
     def trace(self, event, info):
+        if event == 'connection.connect_tcp.started':
+            self.check()
         # httpcore's documented trace extension exposes the connected stream
         # before request writes/response headers, unlike response extensions.
         if event == 'connection.connect_tcp.complete':
@@ -107,7 +117,7 @@ class _ResponseDeadline:
             if connection is None:
                 raise ValueError('response_transport_unavailable')
             with self._lock:
-                if self._expired or time.monotonic() >= self.deadline:
+                if self._deadline_expired():
                     self._shutdown(connection)
                     connection.close()  # Trace failed before the pool owned this stream.
                     raise TimeoutError('response_deadline')
@@ -115,7 +125,7 @@ class _ResponseDeadline:
 
     def check(self):
         with self._lock:
-            if self._expired or time.monotonic() >= self.deadline:
+            if self._deadline_expired():
                 raise TimeoutError('response_deadline')
 
     def __exit__(self, *args):
@@ -130,7 +140,7 @@ class SubscriptionBroker:
     RESOLVE_TIMEOUT = 2
     RESPONSE_TIMEOUT = 300
 
-    def __init__(self, owner_home, upstream, *, port=8319):
+    def __init__(self, owner_home, upstream, *, port=8319, authorization=None):
         self.home = Path(owner_home)
         if not self.home.is_absolute() or self.home.resolve() != self.home:
             raise ValueError('invalid_owner')
@@ -139,6 +149,7 @@ class SubscriptionBroker:
         self.directory = self.home / 'cpa/run/subscription'
         self.control_path = self.directory / 'supervisor.sock'
         self.port = port
+        self.authorization = authorization
         self._signing = secrets.token_bytes(32)
         self._epoch = 0
         self._fingerprint = None
@@ -148,6 +159,10 @@ class SubscriptionBroker:
         self._slots = threading.BoundedSemaphore(32)
         # One unresolved filesystem job at most, even after caller timeout.
         self._resolver_slot = threading.BoundedSemaphore(1)
+
+    def _require_authorization(self):
+        if self.authorization is not None and not self.authorization.current():
+            raise ValueError('authorization_expired')
 
     def _consumer(self, home):
         from hermes_constants import named_profile_has_identity, named_profile_is_deleted
@@ -275,18 +290,24 @@ class SubscriptionBroker:
             self._epoch += 1
 
     def grant(self, home, *, enrolled=False):
+        self._require_authorization()
         consumer, identity, _key, epoch = self._resolve(home, enrolled=enrolled)
         with self._lock:
+            self._require_authorization()
             if self._closed.is_set() or epoch != self._epoch:
                 raise ValueError('revoked_grant')
+            expiry = time.time() + 30
+            if self.authorization is not None:
+                expiry = min(expiry, self.authorization.expires_at)
             record = json.dumps([consumer, identity,
-                                 epoch, time.time() + 30,
+                                 epoch, expiry,
                                  secrets.token_hex(16)], separators=(',', ':')).encode().hex()
             signature = hmac.new(self._signing, record.encode(), 'sha256').hexdigest()
             return record + '.' + signature
 
     def authorize(self, token):
         try:
+            self._require_authorization()
             if not isinstance(token, str) or len(token) > 8192:
                 raise ValueError('invalid_grant')
             record, signature = token.split('.')
@@ -296,6 +317,7 @@ class SubscriptionBroker:
             home, identity, epoch, expiry, _connection = json.loads(bytes.fromhex(record))
             _consumer, current, key, resolved_epoch = self._resolve(home, enrolled=len(identity) == 3)
             with self._lock:
+                self._require_authorization()
                 if (identity != current or epoch != resolved_epoch or epoch != self._epoch or
                         time.time() >= expiry or self._closed.is_set()):
                     raise ValueError('revoked_grant')
@@ -362,6 +384,7 @@ class SubscriptionBroker:
 
     def __enter__(self):
         import fcntl
+        self._require_authorization()
         private_directory(self.directory)
         # Broker lifetime lock: one broker per owner home across CLI/owner hosts.
         lock = private_open(self.directory / 'broker.lock', os.O_RDWR | os.O_CREAT)
@@ -397,12 +420,14 @@ class SubscriptionBroker:
 
     @contextmanager
     def _response_budget(self, connection):
-        with _ResponseDeadline(connection, self.RESPONSE_TIMEOUT) as budget:
+        with _ResponseDeadline(connection, self.RESPONSE_TIMEOUT, self.authorization) as budget:
             with self._lock:
+                self._require_authorization()
                 if self._closed.is_set():
                     raise ValueError('broker_closed')
                 self._responses.add(budget)
             try:
+                budget.check()
                 yield budget
             finally:
                 with self._lock:
@@ -536,6 +561,7 @@ class SubscriptionBroker:
                     with (broker._response_budget(self.connection) as budget,
                           httpx.Client(trust_env=False, follow_redirects=False,
                                        timeout=min(10, broker.RESPONSE_TIMEOUT)) as client):
+                        budget.check()
                         with client.stream(self.command, broker.upstream + self.path,
                                 content=body, headers={'Authorization': 'Bearer ' + key,
                                                        'Content-Type': 'application/json'},

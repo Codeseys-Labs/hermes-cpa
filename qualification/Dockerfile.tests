@@ -1,0 +1,15 @@
+# Build with hermes-cpa/tests as the context.
+ARG QUALIFICATION_IMAGE
+FROM ${QUALIFICATION_IMAGE}
+
+USER root
+WORKDIR /opt/q/host
+RUN UV_OFFLINE=0 UV_PROJECT_ENVIRONMENT=/opt/q/venv UV_PYTHON_DOWNLOADS=never UV_LINK_MODE=copy \
+    uv sync --frozen --group dev --group test --inexact --python /usr/local/bin/python \
+    && uv pip check --python /opt/q/venv/bin/python
+COPY . /opt/q/hermes-cpa/tests
+
+USER 10001:10001
+ENV PYTHONPATH=/opt/q/hermes-cpa/src:/opt/q/host \
+    CPA_TEST_ARCHIVE=/opt/q/cache/CLIProxyAPI_8.0.21_linux_amd64.tar.gz
+CMD ["python", "-m", "pytest", "-q", "/opt/q/hermes-cpa/tests", "-p", "no:cacheprovider"]

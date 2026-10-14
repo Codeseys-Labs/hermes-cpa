@@ -148,7 +148,7 @@ class CpaSupervisor:
                  transaction=None, readiness_timeout=30., stop_grace=10.,
                  watchdog_interval=5., policy_failure_timeout=30., command=None,
                  compatibility_check=None, lifetime='persistent', lease_grace=10.,
-                 broker=None):
+                 broker=None, authorization=None):
         self.settings = settings
         self.mode = mode or getattr(settings, 'mode', 'external')
         self.port = port or getattr(settings, 'managed_port', 8318)
@@ -157,6 +157,7 @@ class CpaSupervisor:
         self.transaction = transaction
         self.command = command  # Dependency injection for harmless subprocess tests only.
         self.compatibility_check = compatibility_check
+        self.authorization = authorization
         self.readiness_timeout, self.stop_grace = readiness_timeout, stop_grace
         self.watchdog_interval, self.policy_failure_timeout = watchdog_interval, policy_failure_timeout
         self.child_process = None
@@ -193,20 +194,31 @@ class CpaSupervisor:
         self._broker = None
         self.broker_state = 'disabled' if broker is None else 'stopped'
 
+    def _authorization_current(self):
+        return self.authorization is None or self.authorization.current()
+
+    def _authorized_timeout(self, timeout):
+        return timeout if self.authorization is None else min(timeout, self.authorization.remaining())
+
     def _capture_policy(self):
         """Pin an accepted operation to the exact policy incarnation, if supported.
 
         Returns None when the policy denies or cannot be read now.
         """
+        if not self._authorization_current():
+            return None
         capture = getattr(self.policy, 'capture', None)
         if capture is None:
             return True  # Injected test policies have no incarnation to pin.
         try:
-            return capture()
+            captured = capture()
+            return captured if self._authorization_current() else None
         except Exception:
             return None
 
     def _operation_allowed(self, captured=None):
+        if not self._authorization_current():
+            return False
         if captured is None:
             captured = getattr(self._operation_policy, 'captured', None)
         if captured is not None and captured is not True and not self.policy.matches(captured):
@@ -250,19 +262,25 @@ class CpaSupervisor:
                 raise RuntimeError('ownership_lost')
 
     def _policy_ok(self, captured=None):
+        if not self._authorization_current():
+            self._policy_failure_since = None  # Expiry never receives transient-policy grace.
+            return False
         try:
             allowed = self.policy() is True and self._operation_allowed(captured)
             self._policy_failure_since = None
-            return allowed
+            return allowed and self._authorization_current()
         except Exception:
-            if self._policy_failure_since is None:
+            if not self._authorization_current():
+                self._policy_failure_since = None
+            elif self._policy_failure_since is None:
                 self._policy_failure_since = time.monotonic()
             return False
 
     def watchdog(self):
         if self._policy_ok():
             return True
-        if (self._policy_failure_since is not None and
+        expired = not self._authorization_current()
+        if (not expired and self._policy_failure_since is not None and
                 time.monotonic() - self._policy_failure_since < self.policy_failure_timeout):
             self.sanitized_reason = 'policy_unavailable'
             return False
@@ -272,7 +290,8 @@ class CpaSupervisor:
         with self.mutation_gate:
             stopped = self.stop_child()
             if stopped:
-                self._transition(LifecycleState.STOPPED, 'policy_disabled')
+                self._transition(LifecycleState.STOPPED,
+                                 'authorization_expired' if expired else 'policy_disabled')
             self.running = False
         return False
 
@@ -330,6 +349,8 @@ class CpaSupervisor:
                         raise RuntimeError('unsafe_config')
                 command = self.command or [str(self.settings.binary_path), '-config',
                                             str(self.settings.config_path), '-local-model']
+                if self._shutdown or not self._policy_ok():
+                    raise RuntimeError('policy_locked')
                 self._transition(LifecycleState.STARTING)
                 self.child_process = subprocess.Popen(
                     [sys.executable, str(Path(__file__).with_name('process_owner.py')),
@@ -340,7 +361,7 @@ class CpaSupervisor:
             except Exception:
                 self._transition(LifecycleState.FAILED, 'launch_failed')
                 return False
-            deadline = time.monotonic() + self.readiness_timeout
+            deadline = time.monotonic() + self._authorized_timeout(self.readiness_timeout)
             reason = 'readiness_timeout'
             while time.monotonic() < deadline:
                 if self.child_process.poll() is not None:
@@ -350,7 +371,8 @@ class CpaSupervisor:
                     reason = 'policy_locked'
                     break
                 try:
-                    result = self.probe(timeout=min(1., max(.001, deadline - time.monotonic())))
+                    result = self.probe(timeout=self._authorized_timeout(
+                        min(1., max(.001, deadline - time.monotonic()))))
                     if (time.monotonic() < deadline and not self._shutdown and
                             self._policy_ok() and
                             getattr(result, 'management_ready', False) is True and
@@ -363,6 +385,8 @@ class CpaSupervisor:
                 except Exception:
                     pass  # Never put upstream errors/keys in diagnostics.
                 time.sleep(min(.05, max(0., deadline - time.monotonic())))
+            if not self._authorization_current():
+                reason = 'authorization_expired'
             self.stop_child(grace_period=min(self.stop_grace, .5))
             self._transition(LifecycleState.FAILED, reason)
             return False
@@ -392,6 +416,9 @@ class CpaSupervisor:
 
     def check_health(self):
         """Refresh readiness without restarting; never hold up a mutation in progress."""
+        if not self._authorization_current():
+            self.watchdog()
+            return
         if not self.mutation_gate.acquire(blocking=False):
             return
         try:
@@ -408,11 +435,12 @@ class CpaSupervisor:
             except RuntimeError:
                 self._transition(LifecycleState.OWNERSHIP_LOST, 'ownership_lost')
                 return
-            deadline = time.monotonic() + 1.
+            timeout = self._authorized_timeout(1.)
+            deadline = time.monotonic() + timeout
             healthy = False
             result = None
             try:
-                result = probe(timeout=1.)
+                result = probe(timeout=timeout)
                 healthy = (time.monotonic() < deadline and not self._shutdown and
                            self._policy_ok() and result.management_ready is True and
                            result.compatible is True and child.poll() is None and
@@ -435,11 +463,13 @@ class CpaSupervisor:
         if (self.child_process and self.child_process.poll() is not None and
                 self.state in (LifecycleState.READY, LifecycleState.STARTING, LifecycleState.DEGRADED)):
             self._transition(LifecycleState.FAILED, 'child_exited')
+        authorized = self._authorization_current()
         return {'state': self.state.value, 'generation': self.generation,
                 'pid': self.child_process.pid if self.child_process and self.child_process.poll() is None else None,
                 'owner': process_identity(os.getpid()), 'last_transition': self.last_transition,
-                'reason': self.sanitized_reason, 'management_ready': self.state == LifecycleState.READY,
-                'inference_configured': self.inference_configured,
+                'reason': self.sanitized_reason if authorized else 'authorization_expired',
+                'management_ready': authorized and self.state == LifecycleState.READY,
+                'inference_configured': self.inference_configured if authorized else None,
                 'lifetime': self.lifetime, 'broker': self.broker_state}
 
     def transaction_owner(self):
@@ -640,7 +670,7 @@ class CpaSupervisor:
 
     def _start_broker(self):
         """Enter the default-owner inference broker; a conflict is reported, never adopted."""
-        if self.broker is None:
+        if self.broker is None or not self._authorization_current():
             return
         try:
             broker = self.broker()
@@ -691,6 +721,9 @@ class CpaSupervisor:
         self._start_broker()
         last_watchdog = 0.
         while self.running:
+            if not self._authorization_current():
+                self.watchdog()
+                break
             if self._exit_deadline is not None and time.monotonic() >= self._exit_deadline:
                 break
             try:
@@ -717,9 +750,9 @@ class CpaSupervisor:
                 try:
                     peer_pid(conn)
                     raw = bytearray()
-                    deadline = time.monotonic() + 1.
+                    deadline = time.monotonic() + self._authorized_timeout(1.)
                     while not raw.endswith(b'\n'):
-                        remaining = deadline - time.monotonic()
+                        remaining = self._authorized_timeout(deadline - time.monotonic())
                         if remaining <= 0:
                             raise ValueError('invalid_input')
                         conn.settimeout(remaining)

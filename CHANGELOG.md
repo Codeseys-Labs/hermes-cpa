@@ -2,6 +2,10 @@
 
 ## Unreleased — staged integration candidate
 
+- Enforced captured candidate authorization across managed owners, broker grants and response budgets; expiry now stops owned services, and permit renewal cannot extend a running owner.
+- Fixed callable-credential model discovery and prevented disabled/removed named providers from entering credential fallback. Preserved mode-specific validation when a callable credential fails.
+- Added repeatable real `custom:cpa` qualification through the native runtime, broker and pinned CPA, with generated loopback inference, model refresh and independent retirement proofs.
+- Added a separate frozen-dependency test image, avoiding local venv/path contamination without weakening home-I/O guards.
 - Restored CPAMC traffic and provider-fleet presentation over a bounded, independently validated API-key usage projection. Kept OAuth exclusion, unavailable windows and valid zero traffic explicit; removed stale charts when host polling pauses.
 - Added reproducible private-root qualification and a pinned, isolated Docker deployment with per-project volumes and persistent session tokens.
 - Reused one hosted healthcheck selection across repeated/concurrent reads, enforced backend restart after package refresh, verified installed inventories and rejected duplicate backends.

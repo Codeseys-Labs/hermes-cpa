@@ -8,6 +8,9 @@
 !hermes-cpa/**
 !qualification/
 !qualification/Dockerfile
+!qualification/Dockerfile.tests
+!qualification/Dockerfile.tests.dockerignore
+!qualification/provider_smoke.py
 !qualification/test_qualification.py
 
 # Denials follow the allowlist so they win even inside included trees. This is

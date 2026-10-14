@@ -23,6 +23,7 @@ WORKDIR /opt/q
 ADD --checksum=sha256:a40164e25a60869df2c489702383d4e64dc27bb08eaafd7b04a101a2f5cfc625 https://github.com/router-for-me/CLIProxyAPI/releases/download/v8.0.21/CLIProxyAPI_8.0.21_linux_amd64.tar.gz /opt/q/cache/CLIProxyAPI_8.0.21_linux_amd64.tar.gz
 COPY hermes-cpa /opt/q/hermes-cpa
 COPY qualification/test_qualification.py /opt/q/qualification/test_qualification.py
+COPY qualification/provider_smoke.py /opt/q/qualification/provider_smoke.py
 
 FROM --platform=linux/amd64 python:3.14-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates libstdc++6 \
