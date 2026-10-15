@@ -1569,3 +1569,450 @@ def test_native_plugin_review_unsupported_is_an_observed_pre_dispatch_refusal(co
     assert public['ok'] and private['state'] == 'succeeded'
     assert private['result']['status'] == 400
     assert private['result']['body']['value'] == {'error': 'plugin_review_unsupported'}
+
+
+# ---- once-per-session approval of fixed built-in quota/profile reads ----
+API_CALL = PREFIX + '/requests/api-call'
+INVENTORY = PREFIX + '/credentials'
+ACCOUNT = '0f3c7a52-1b9e-4c8a-9d21-6a5e4b7c8d90'
+SCOPE_EFFECTS = ['network_destination', 'quota_reads_until_lock']
+TOKEN = 'Bearer $TOKEN$'
+CODEX_AGENT = 'codex-tui/0.149.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.149.1)'
+CODEX_HEADER = {'Authorization': TOKEN, 'Content-Type': 'application/json',
+                'User-Agent': CODEX_AGENT, 'Chatgpt-Account-Id': ACCOUNT}
+CODEX_CREDITS_HEADER = dict(CODEX_HEADER, Accept='application/json',
+                            **{'OpenAI-Beta': 'codex-1', 'Originator': 'Codex Desktop'})
+CLAUDE_HEADER = {'Authorization': TOKEN, 'Content-Type': 'application/json',
+                 'User-Agent': 'claude-cli/2.1.280 (external, cli)', 'anthropic-beta': 'oauth-2025-04-20'}
+AGY_HEADER = {'Authorization': TOKEN, 'Content-Type': 'application/json',
+              'User-Agent': 'antigravity/cli/1.0.13 (aidev_client; os_type=darwin; arch=arm64)'}
+CODEX_URL = 'https://chatgpt.com/backend-api'
+AGY_HOST = 'https://daily-cloudcode-pa.googleapis.com/v1internal:'
+PROJECT = 'generated-project-123'
+
+
+def credential(provider, index, **extra):
+    return {'auth_index': index, 'id': index + '.json', 'name': index + '.json', 'provider': provider,
+            'type': provider, 'email': index + '@generated.example', 'created_at': '2026-01-01T00:00:00Z',
+            'path': '/generated/auth/' + index + '.json', 'source': 'file', 'modtime': '2026-01-02T00:00:00Z',
+            'size': 100, **extra}
+
+
+def codex_credential(index='codex-index', account=ACCOUNT, **extra):
+    return credential('codex', index, id_token={'chatgpt_account_id': account, 'plan_type': 'plus'}, **extra)
+
+
+def inventory(native, *rows):
+    native.responses['GET', INVENTORY] = {'files': list(rows)}
+
+
+def api_call(url, header, index='codex-index', method='GET', **extra):
+    return request('/requests/api-call', 'POST', {
+        'authIndex': index, 'method': method, 'url': url, 'header': dict(header), **extra})
+
+
+def codex_usage(index='codex-index'):
+    return api_call(CODEX_URL + '/wham/usage', CODEX_HEADER, index)
+
+
+def codex_subscription(account=ACCOUNT, index='codex-index'):
+    return api_call(CODEX_URL + '/subscriptions?account_id=' + account, CODEX_HEADER, index)
+
+
+def codex_credits(index='codex-index'):
+    return api_call(CODEX_URL + '/wham/rate-limit-reset-credits', CODEX_CREDITS_HEADER, index)
+
+
+def claude_call(path, index='claude-index'):
+    return api_call('https://api.anthropic.com' + path, CLAUDE_HEADER, index)
+
+
+def agy_call(endpoint, data, index='agy-index', host=AGY_HOST, header=AGY_HEADER):
+    return api_call(host + endpoint, header, index, 'POST', data=data)
+
+
+def agy_quota(project=PROJECT, index='agy-index'):
+    return agy_call('retrieveUserQuotaSummary', json.dumps({'project': project}), index)
+
+
+def agy_subscription(index='agy-index'):
+    return agy_call('loadCodeAssist', json.dumps({'metadata': {'ideType': 'ANTIGRAVITY'}}), index)
+
+
+def egress_policy_of(call):
+    header = call[2]['headers']['X-Hermes-Egress-Policy']
+    return json.loads(base64.urlsafe_b64decode(header + '=' * (-len(header) % 4)))
+
+
+def api_calls(native):
+    return [call for call in native.calls if call[1] == API_CALL]
+
+
+def run(console, wire, request_id):
+    review = prepare(console, wire, request_id)
+    assert review['ok'], review
+    assert execute(console, review, request_id)['ok']
+    public, _ = finish(console)
+    assert public['ok']
+    return review
+
+
+def reopen(console, suffix):
+    service, owner, _, args = console
+    scope = dict(args['_scope'], document_id=str(uuid.uuid4()))
+    unlocked = service.dispatch('unlock', {'_scope': scope, 'document_id': scope['document_id'],
+        'request_id': 'unlock-' + suffix, 'expected_generation': owner.generation, 'consent': True})
+    assert unlocked['ok']
+    return console[:3] + (dict(args, _scope=scope, document_id=scope['document_id'], lease_id=unlocked['lease_id']),)
+
+
+def test_first_codex_read_prompts_and_one_acceptance_covers_parallel_and_followup_reads(console):
+    service, owner, native, _ = console
+    inventory(native, codex_credential())
+    usage = prepare(console, codex_usage(), 'usage')
+    subscription = prepare(console, codex_subscription(), 'subscription')
+    credits_early = prepare(console, codex_credits(), 'credits-early')
+    for review in (usage, subscription, credits_early):
+        assert review['requires_confirmation'] is True, 'prepare alone never installs a remembered grant'
+        assert review['effects'] == SCOPE_EFFECTS
+        assert review['approval_scope'] == {'kind': 'quota_reads', 'provider': 'codex', 'granted': False}
+        assert 'until you Lock the console or this unlocked session expires' in review['summary']
+        assert 'not other network calls' in review['summary'] and 'credit consumption' in review['summary']
+        assert 'generated.example' not in review['summary'] and '$TOKEN$' not in review['summary']
+    assert execute(console, usage, 'usage', approve=False)['code'] == 'CONSENT_REQUIRED'
+    assert prepare(console, codex_credits(), 'credits-after-decline')['requires_confirmation'] is True
+    # Both reviews were prepared before either ran: neither pins a resource version the other can invalidate.
+    assert execute(console, usage, 'usage')['ok'] and execute(console, subscription, 'subscription')['ok']
+    for job in list(owner.submissions):
+        assert service.execute_job(job)['ok']
+    policies = sorted((egress_policy_of(call) for call in api_calls(native)),
+                      key=lambda policy: policy['destinations'][0]['path_prefix'])
+    assert [p['destinations'][0]['path_prefix'] for p in policies] == [
+        '/backend-api/subscriptions', '/backend-api/wham/usage']
+    for policy in policies:
+        assert policy == {'version': 1, 'destinations': [{
+            'scheme': 'https', 'host': 'chatgpt.com', 'port': 443,
+            'path_prefix': policy['destinations'][0]['path_prefix']}], 'methods': ['GET'],
+            'redirects': 'deny', 'allow_token': True, 'proxy': {'mode': 'configured'},
+            'auth_index': 'codex-index'}
+    # The follow-up read needs no new dialog, yet keeps its own owner review and exact effect consent.
+    followup = prepare(console, codex_credits(), 'credits')
+    assert followup['requires_confirmation'] is False and followup['effects'] == SCOPE_EFFECTS
+    assert followup['approval_scope']['granted'] is True
+    assert prepare(console, codex_credits(), 'credits-early')['requires_confirmation'] is False
+    assert execute(console, followup, 'credits', approve=False)['code'] == 'CONSENT_REQUIRED'
+    assert execute(console, followup, 'credits')['ok']
+    public, _ = finish(console)
+    assert public['ok']
+    assert egress_policy_of(api_calls(native)[-1])['destinations'][0]['path_prefix'] == (
+        '/backend-api/wham/rate-limit-reset-credits')
+    assert len(owner.submissions) == 3
+
+
+def test_grant_is_per_credential_and_provider(console):
+    _, _, native, _ = console
+    inventory(native, codex_credential(), codex_credential('codex-other', account='other-account'),
+              credential('claude', 'claude-index'))
+    run(console, codex_usage(), 'usage')
+    assert prepare(console, codex_credits(), 'credits')['requires_confirmation'] is False
+    other = prepare(console, api_call(CODEX_URL + '/wham/usage', dict(CODEX_HEADER, **{
+        'Chatgpt-Account-Id': 'other-account'}), 'codex-other'), 'other-usage')
+    assert other['requires_confirmation'] is True and other['approval_scope']['granted'] is False
+    claude = prepare(console, claude_call('/api/oauth/usage'), 'claude-usage')
+    assert claude['requires_confirmation'] is True and claude['approval_scope']['provider'] == 'claude'
+    run(console, claude_call('/api/oauth/usage'), 'claude-run')
+    assert prepare(console, claude_call('/api/oauth/profile'), 'claude-profile')['requires_confirmation'] is False
+    assert prepare(console, claude_call('/api/oauth/usage?cedar_ember=1&skip_spend=1'),
+                   'claude-grants')['requires_confirmation'] is False
+    assert prepare(console, codex_usage(), 'usage-again')['requires_confirmation'] is False
+    assert prepare(console, codex_credits('codex-other'), 'unlisted')['requires_confirmation'] is True
+
+
+def test_antigravity_exact_post_reads_are_scoped_and_keep_read_effects(console):
+    _, _, native, _ = console
+    inventory(native, credential('antigravity', 'agy-index', project_id=PROJECT))
+    first = prepare(console, agy_subscription(), 'agy-subscription')
+    assert first['effects'] == SCOPE_EFFECTS and first['requires_confirmation'] is True
+    assert 'external_mutation' not in first['effects']
+    run(console, agy_subscription(), 'agy-subscription')
+    sandbox = agy_call('retrieveUserQuotaSummary', json.dumps({'project': PROJECT}),
+                       host='https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:')
+    assert prepare(console, agy_quota(), 'agy-quota')['requires_confirmation'] is False
+    assert prepare(console, sandbox, 'agy-sandbox')['requires_confirmation'] is False
+    policy = egress_policy_of(api_calls(native)[-1])
+    assert policy['methods'] == ['POST'] and policy['redirects'] == 'deny'
+    assert policy['destinations'][0]['path_prefix'] == '/v1internal:loadCodeAssist'
+    for index, wire in enumerate([
+            agy_quota('other-project-999'),
+            agy_call('retrieveUserQuotaSummary', json.dumps({'project': PROJECT, 'model': 'generated'})),
+            agy_call('retrieveUserQuotaSummary', '{"project":"%s","project":"other-project-999"}' % PROJECT),
+            agy_call('loadCodeAssist', json.dumps({'metadata': {'ideType': 'OTHER'}})),
+            agy_call('generateContent', '{}'),
+            agy_call('retrieveUserQuotaSummary', json.dumps({'project': PROJECT}),
+                     host='https://cloudcode-pa.googleapis.com/v1internal:', header=dict(AGY_HEADER, Host='x'))]):
+        review = prepare(console, wire, f'agy-negative-{index}')
+        assert review.get('requires_confirmation', True) is True and 'approval_scope' not in review
+        assert 'quota_reads_until_lock' not in review.get('effects', [])
+    # A project the trusted inventory does not prove keeps the ordinary review.
+    inventory(native, credential('antigravity', 'agy-index'))
+    unproven = prepare(console, agy_quota(), 'agy-no-trusted-project')
+    assert unproven['requires_confirmation'] is True and 'approval_scope' not in unproven
+    assert 'external_mutation' in unproven['effects']
+
+
+NEGATIVE_SHAPES = {
+    'extra-header': lambda v: v['header'].update({'X-Debug': '1'}),
+    'host-header': lambda v: v['header'].update({'Host': 'chatgpt.com'}),
+    'duplicate-case-header': lambda v: v['header'].update(authorization=TOKEN),
+    'literal-token': lambda v: v['header'].update(Authorization='Bearer literal'),
+    'wrong-account-header': lambda v: v['header'].update({'Chatgpt-Account-Id': 'other-account'}),
+    'proxy': lambda v: v.update(proxy_url='socks5://proxy.example:1080'),
+    'direct-proxy': lambda v: v.update(proxy_url='direct'),
+    'query': lambda v: v.update(url=v['url'] + '?debug=1'),
+    'other-path': lambda v: v.update(url=v['url'] + '/extra'),
+    'other-host': lambda v: v.update(url=v['url'].replace('chatgpt.com', 'chatgpt.com.example')),
+    'userinfo': lambda v: v.update(url=v['url'].replace('chatgpt.com', 'user@chatgpt.com')),
+    'plain-http': lambda v: v.update(url=v['url'].replace('https', 'http')),
+    'user-agent-suffix': lambda v: v['header'].update({'User-Agent': CODEX_AGENT + ' extra'}),
+    'explicit-port': lambda v: v.update(url=v['url'].replace('chatgpt.com', 'chatgpt.com:443')),
+    'method': lambda v: v.update(method='POST'),
+    'body': lambda v: v.update(data='{}'),
+    'ambiguous-index': lambda v: v.update(auth_index='codex-index'),
+    'unknown-field': lambda v: v.update(extra='x'),
+}
+
+
+@pytest.mark.parametrize('shape', sorted(NEGATIVE_SHAPES))
+def test_changed_quota_request_shapes_stay_on_ordinary_review_after_a_grant(console, shape):
+    _, _, native, _ = console
+    inventory(native, codex_credential())
+    run(console, codex_usage(), 'usage')
+    assert prepare(console, codex_credits(), 'covered')['requires_confirmation'] is False
+    wire = codex_usage()
+    NEGATIVE_SHAPES[shape](wire['body']['value'])
+    review = prepare(console, wire, 'changed')
+    assert review.get('requires_confirmation', True) is True and 'approval_scope' not in review
+    assert 'quota_reads_until_lock' not in review.get('effects', [])
+
+
+def test_destinations_overrides_and_non_read_quota_actions_are_never_grouped(console):
+    service, owner, native, _ = console
+    inventory(native, codex_credential(), credential('claude', 'claude-index'),
+              credential('antigravity', 'agy-index', project_id=PROJECT))
+    run(console, codex_usage(), 'usage')
+    redirect = prepare(console, codex_usage(), 'redirect',
+                       egress_destinations=[{'scheme': 'https', 'host': 'redirect.example'}])
+    assert 'cross_origin_redirect' in redirect['effects'] and redirect['requires_confirmation'] is True
+    assert 'approval_scope' not in redirect
+    consume = prepare(console, api_call(CODEX_URL + '/wham/rate-limit-reset-credits/consume', CODEX_HEADER,
+                                        method='POST', data='{"redeem_request_id":"generated"}'), 'consume')
+    claim = prepare(console, api_call('https://api.anthropic.com/api/organizations/generated/reset_rate_limits',
+                                      CLAUDE_HEADER, 'claude-index', 'POST', data='{}'), 'claim')
+    inference = prepare(console, agy_call('generateContent', '{}'), 'inference')
+    for review, effect in ((consume, 'credit_consume'), (claim, 'entitlement_claim'), (inference, 'paid_inference')):
+        assert effect in review['effects'] and review['requires_confirmation'] is True
+        assert 'approval_scope' not in review and 'quota_reads_until_lock' not in review['effects']
+    native.responses['GET', '/hermes/plugin-routes'] = {
+        'registry_revision': '0123456789abcdef-1', 'management': [], 'resources': [],
+        'dispatches': [{'plugin_id': 'demo', 'quota': True}]}
+    plugin = prepare(console, request('/plugins/demo/quota', query={'auth_index': 'codex-index'}), 'plugin')
+    assert 'plugin_code' in plugin['effects'] and plugin['requires_confirmation'] is True
+    assert 'approval_scope' not in plugin
+    assert prepare(console, codex_credits(), 'still-covered')['requires_confirmation'] is False
+
+
+def test_lock_expiry_generation_and_reopen_clear_the_grant(console, monkeypatch):
+    import time
+    import hermes_cpa.console_service as module
+    service, owner, native, args = console
+    inventory(native, codex_credential())
+    run(console, codex_usage(), 'usage')
+    assert prepare(console, codex_credits(), 'covered')['requires_confirmation'] is False
+    assert service.dispatch('lock', args)['locked']
+    assert prepare(console, codex_credits(), 'after-lock')['code'] in ('LEASE_EXPIRED', 'STALE_SCOPE')
+    reopened = reopen(console, 'after-lock')
+    assert prepare(reopened, codex_credits(), 'reopened')['requires_confirmation'] is True
+    run(reopened, codex_usage(), 'usage-reopened')
+    assert prepare(reopened, codex_credits(), 'covered-again')['requires_confirmation'] is False
+    clock = time.monotonic
+    monkeypatch.setattr(time, 'monotonic', lambda: clock() + module.LEASE_SECONDS + 1)
+    assert prepare(reopened, codex_credits(), 'after-expiry')['code'] in ('LEASE_EXPIRED', 'STALE_SCOPE')
+    again = reopen(console, 'after-expiry')
+    assert prepare(again, codex_credits(), 'reopened-after-expiry')['requires_confirmation'] is True
+    monkeypatch.undo()
+    owner.generation += 1
+    assert prepare(again, codex_credits(), 'after-generation')['code'] in (
+        'STALE_GENERATION', 'LEASE_EXPIRED', 'STALE_SCOPE')
+    fresh = reopen(console, 'after-generation')
+    assert prepare(fresh, codex_credits(), 'fresh-generation')['requires_confirmation'] is True
+
+
+def test_changed_credential_identity_invalidates_prepared_and_remembered_grants(console):
+    service, owner, native, _ = console
+    inventory(native, codex_credential())
+    run(console, codex_usage(), 'usage')
+    covered = prepare(console, codex_credits(), 'covered')
+    assert covered['requires_confirmation'] is False
+    inventory(native, codex_credential(email='replacement@generated.example'))
+    assert prepare(console, codex_credits(), 'covered')['code'] == 'REQUEST_CONFLICT', (
+        'a reused request ID cannot carry a review across a replaced credential')
+    replaced = prepare(console, codex_credits(), 'replaced')
+    assert replaced['requires_confirmation'] is True and replaced['approval_scope']['granted'] is False
+    # The accepted review is also re-verified immediately before anything is sent.
+    assert execute(console, replaced, 'replaced')['ok']
+    inventory(native, codex_credential(email='another@generated.example'))
+    sent = len(api_calls(native))
+    public = service.execute_job(owner.submissions[-1])
+    assert public['ok'] is False and public['code'] == 'REVIEW_STALE'
+    assert len(api_calls(native)) == sent, 'nothing is sent for a replaced credential'
+    private = service.dispatch('result', dict(console[3], operation_id='replaced'))
+    assert private['state'] == 'failed' and private['code'] == 'REVIEW_STALE'
+    inventory(native, codex_credential(email='replacement@generated.example'))
+    run(console, codex_credits(), 'replaced-again')
+    assert prepare(console, codex_usage(), 'covered-by-replacement')['requires_confirmation'] is False
+    inventory(native, credential('claude', 'codex-index'))
+    assert prepare(console, codex_usage(), 'provider-changed')['requires_confirmation'] is True
+    inventory(native)
+    assert prepare(console, codex_usage(), 'removed')['requires_confirmation'] is True
+    native.responses['GET', INVENTORY] = SimpleNamespace(status=503, headers={}, body=b'{}')
+    unavailable = prepare(console, codex_usage(), 'inventory-down')
+    assert unavailable['requires_confirmation'] is True and 'approval_scope' not in unavailable
+
+
+def test_credential_replacement_voids_the_grant_but_a_token_refresh_does_not(console):
+    _, _, native, _ = console
+    inventory(native, codex_credential())
+    run(console, codex_usage(), 'usage')
+    inventory(native, codex_credential(modtime='2026-02-01T00:00:00Z', size=4096, updated_at='2026-02-01T00:00:00Z'))
+    assert prepare(console, codex_credits(), 'after-refresh')['requires_confirmation'] is False
+    inventory(native, codex_credential(created_at='2026-03-01T00:00:00Z'))
+    assert prepare(console, codex_credits(), 'after-replacement')['requires_confirmation'] is True
+
+
+def test_credential_operations_revoke_remembered_quota_grants(console):
+    _, _, native, _ = console
+    inventory(native, codex_credential())
+    run(console, codex_usage(), 'usage')
+    assert prepare(console, codex_credits(), 'covered')['requires_confirmation'] is False
+    run(console, request('/credentials/refresh', 'POST', {'name': 'codex-index.json'}), 'refresh')
+    assert prepare(console, codex_credits(), 'after-refresh')['requires_confirmation'] is True
+
+
+def test_refused_execute_never_records_a_grant_and_host_grants_stay_per_operation(console, monkeypatch):
+    import hermes_cpa.operation_guard as guard
+    service, owner, native, args = console
+    inventory(native, codex_credential())
+    accept = owner.submit
+    monkeypatch.setattr(owner, 'submit', lambda _: {'ok': False, 'code': 'POLICY_LOCKED'})
+    first = prepare(console, codex_usage(), 'refused')
+    assert execute(console, first, 'refused') == {'ok': False, 'code': 'POLICY_LOCKED'}
+    assert prepare(console, codex_credits(), 'after-refusal')['requires_confirmation'] is True
+    monkeypatch.setattr(owner, 'submit', accept)
+    run(console, codex_usage(), 'usage')
+    covered = prepare(console, codex_credits(), 'covered')
+    assert covered['requires_confirmation'] is False
+    monkeypatch.setattr(guard, 'revalidate_grant', lambda *_args, **_kwargs: False)
+    submitted = len(owner.submissions)
+    denied = service.dispatch('execute', dict(args, request_id='covered', review_id=covered['review_id'],
+        approved_effects=covered['effects'], _host_grant={'token': 'generated-revoked'}))
+    assert denied == {'ok': False, 'code': 'POLICY_LOCKED'}
+    assert len(owner.submissions) == submitted, 'a remembered approval never replaces the per-operation host grant'
+
+
+# ---- quota reads depend on, but never reserve or bump, the credentials version ----
+def bump_credentials(service):
+    """A managed credential write completing, as _release records it; the inventory row keeps its CreatedAt."""
+    service._versions['credentials'] = service._versions.get('credentials', 0) + 1
+
+
+def test_old_covered_review_is_refused_after_a_credential_replacement_completes(console):
+    service, owner, native, _ = console
+    inventory(native, codex_credential())
+    run(console, codex_usage(), 'usage')
+    old = prepare(console, codex_credits(), 'old-covered')
+    assert old['requires_confirmation'] is False
+    run(console, request('/credentials/refresh', 'POST', {'name': 'codex-index.json'}), 'replace')
+    sent = len(api_calls(native))
+    submitted = len(owner.submissions)
+    assert execute(console, old, 'old-covered')['code'] == 'REVIEW_STALE'
+    assert len(owner.submissions) == submitted and len(api_calls(native)) == sent
+    fresh = prepare(console, codex_credits(), 'fresh')
+    assert fresh['requires_confirmation'] is True and fresh['approval_scope']['granted'] is False
+    run(console, codex_usage(), 'usage-after')
+    assert prepare(console, codex_credits(), 'covered-again')['requires_confirmation'] is False
+
+
+def test_active_credential_writer_blocks_quota_acceptance_and_dispatch(console):
+    service, owner, native, _ = console
+    inventory(native, codex_credential())
+    run(console, codex_usage(), 'usage')
+    old = prepare(console, codex_credits(), 'old-covered')
+    accepted_read = prepare(console, codex_usage(), 'accepted-read')
+    assert execute(console, accepted_read, 'accepted-read')['ok']
+    upload = prepare(console, request('/credentials/refresh', 'POST', {'name': 'codex-index.json'}), 'upload')
+    assert execute(console, upload, 'upload')['ok']
+    assert execute(console, old, 'old-covered')['code'] == 'REVIEW_STALE', 'no read is accepted beside a credential writer'
+    sent = len(api_calls(native))
+    read_job = next(job for job in owner.submissions if job['request_id'] == 'accepted-read')
+    assert service.execute_job(read_job)['code'] == 'REVIEW_STALE'
+    assert len(api_calls(native)) == sent, 'an accepted read is not dispatched beside a credential writer'
+
+
+def test_version_change_between_inventory_read_and_review_storage_stores_nothing(console, monkeypatch):
+    service, owner, native, _ = console
+    inventory(native, codex_credential())
+    run(console, codex_usage(), 'usage')
+    read = service._quota_read
+
+    def replaced_after_inventory(wire):
+        proven = read(wire)
+        bump_credentials(service)
+        return proven
+
+    monkeypatch.setattr(service, '_quota_read', replaced_after_inventory)
+    assert prepare(console, codex_credits(), 'racing')['code'] == 'REVIEW_STALE'
+    assert not any(review.get('request_id') == 'racing' for review in service._reviews.values())
+    monkeypatch.setattr(service, '_quota_read', read)
+    assert prepare(console, codex_credits(), 'after-race')['requires_confirmation'] is True
+
+
+@pytest.mark.parametrize('moment', ['before_dispatch', 'during_dispatch_inventory'])
+def test_version_change_between_acceptance_and_dispatch_sends_nothing_and_leaves_no_grant(console, monkeypatch, moment):
+    service, owner, native, _ = console
+    inventory(native, codex_credential())
+    first = prepare(console, codex_usage(), 'first')
+    assert execute(console, first, 'first')['ok']
+    job = owner.submissions[-1]
+    read = service._quota_read
+    if moment == 'before_dispatch':
+        bump_credentials(service)
+    else:
+        def replaced_during_inventory(wire):
+            proven = read(wire)
+            bump_credentials(service)
+            return proven
+        monkeypatch.setattr(service, '_quota_read', replaced_during_inventory)
+    sent = len(api_calls(native))
+    assert service.execute_job(job)['code'] == 'REVIEW_STALE'
+    assert len(api_calls(native)) == sent
+    monkeypatch.setattr(service, '_quota_read', read)
+    assert prepare(console, codex_credits(), 'after')['requires_confirmation'] is True
+
+
+def test_acceptance_never_installs_a_grant_under_a_newer_credentials_version(console, monkeypatch):
+    service, owner, native, _ = console
+    inventory(native, codex_credential())
+    first = prepare(console, codex_usage(), 'first')
+    submit = owner.submit
+
+    def accepted_then_replaced(job):
+        receipt = submit(job)
+        bump_credentials(service)
+        return receipt
+
+    monkeypatch.setattr(owner, 'submit', accepted_then_replaced)
+    assert execute(console, first, 'first')['ok']
+    monkeypatch.setattr(owner, 'submit', submit)
+    assert prepare(console, codex_credits(), 'after')['requires_confirmation'] is True
+    run(console, codex_usage(), 'second')
+    assert prepare(console, codex_credits(), 'covered')['requires_confirmation'] is False

@@ -845,3 +845,161 @@ test('external open settles only on link activation; cancel, timeout and disposa
   await assert.rejects(gate.request(url), { code: 'UNAVAILABLE' });
   assert.equal(shown.at(-1), null);
 });
+
+// ---- receipt polling behavior ----
+function recordWaits(t) {
+  const waits = [];
+  const realSetTimeout = globalThis.setTimeout;
+  // With these tests' explicit timing, poll and backoff waits are the only integer timers from 10 ms to 5 s.
+  // They run at once; the requested delay is what gets recorded.
+  globalThis.setTimeout = (callback, ms, ...args) => {
+    if (Number.isInteger(ms) && ms >= 10 && ms <= 5000) {
+      waits.push(ms);
+      return realSetTimeout(callback, 0, ...args);
+    }
+    return realSetTimeout(callback, ms, ...args);
+  };
+  t.after(() => { globalThis.setTimeout = realSetTimeout; });
+  return waits;
+}
+const nondecreasing = values => values.every((value, index) => index === 0 || value >= values[index - 1]);
+
+test('a still-running receipt reaches its terminal state promptly, far inside a fixed one-second poll cadence, without resubmitting', async t => {
+  let polls = 0;
+  const { guest, host } = await openSession(t, {
+    '/console/prepare': prepared,
+    '/console/execute': accepted,
+    '/console/result': body => (++polls <= 2
+      ? { data: { operation_id: body.operation_id, state: polls === 1 ? 'pending' : 'running' } }
+      : succeeded(body)),
+  }, { timing: { revokeRetryMs: 1 } });
+  const started = Date.now();
+  const reply = await guest.request('write-1', 'management.request', writeRequest);
+  const elapsed = Date.now() - started;
+  assert.equal(reply.ok, true);
+  assert.equal(polls, 3);
+  assert.ok(elapsed < 1000, `two non-terminal polls must not cost a fixed second each (took ${elapsed} ms)`);
+  assert.equal(host.count('/console/prepare'), 1);
+  assert.equal(host.count('/console/execute'), 1, 'faster polling never resubmits the accepted operation');
+});
+
+test('pending waits grow and never exceed the configured cap', async t => {
+  const waits = recordWaits(t);
+  let polls = 0;
+  const { guest, host } = await openSession(t, {
+    '/console/prepare': prepared,
+    '/console/execute': accepted,
+    '/console/result': body => (++polls <= 6 ? { data: { operation_id: body.operation_id, state: 'running' } } : succeeded(body)),
+  }, { timing: { pollStartMs: 10, pollIntervalMs: 80, pollMaxIntervalMs: 320, revokeRetryMs: 1 } });
+  assert.equal((await guest.request('write-1', 'management.request', writeRequest)).ok, true);
+  assert.equal(waits.length, 6, 'one wait per non-terminal poll');
+  assert.ok(waits.every(ms => ms <= 80), `no pending wait exceeds the cap: ${waits}`);
+  assert.ok(nondecreasing(waits) && waits[0] < waits.at(-1), `waits back off instead of staying fixed: ${waits}`);
+  assert.equal(host.count('/console/execute'), 1);
+});
+
+test('repeated failed or malformed polls back off within the configured bound and then succeed without resubmitting', async t => {
+  const waits = recordWaits(t);
+  let polls = 0;
+  const { guest, host, states } = await openSession(t, {
+    '/console/prepare': prepared,
+    '/console/execute': accepted,
+    '/console/result': body => {
+      polls += 1;
+      if (polls <= 5) throw polls % 2 ? new Error('socket hang up') : desktopBusy();
+      if (polls <= 8) return { data: { state: 'mystery' } };
+      return succeeded(body);
+    },
+  }, { timing: { pollStartMs: 10, pollIntervalMs: 20, pollMaxIntervalMs: 160, revokeRetryMs: 1 } });
+  const reply = await guest.request('write-1', 'management.request', writeRequest);
+  assert.equal(reply.ok, true);
+  assert.equal(waits.length, 8, 'one wait per failed or malformed poll');
+  assert.ok(waits.every(ms => ms <= 160), `error backoff stays within its bound: ${waits}`);
+  assert.ok(nondecreasing(waits) && waits[0] < waits.at(-1), `error backoff grows while failures persist: ${waits}`);
+  assert.equal(host.count('/console/execute'), 1);
+  assert.equal(states.includes('outcome-unknown'), false);
+});
+
+// ---- grouped quota approval: the owner decides, the bridge only honors its review ----
+const QUOTA_EFFECTS = ['network_destination', 'quota_reads_until_lock'];
+const QUOTA_SUMMARY = 'Read Codex usage windows for credential "codex-a.json"\nApproving this also permits the other fixed ' +
+  'built-in Codex quota/profile reads until you Lock the console or this unlocked session expires.';
+const quotaRead = (url) => ({
+  method: 'POST', path: '/v8/management/requests/api-call', response_kind: 'json',
+  body: { kind: 'json', value: { authIndex: 'codex-index', method: 'GET', url, header: { Authorization: 'Bearer $TOKEN$' } } },
+});
+
+function quotaOwner() {
+  const state = { granted: false, executed: [] };
+  const reviews = new Map();
+  state.handlers = {
+    '/console/prepare': body => {
+      const reviewId = `review-${body.request_id}`;
+      reviews.set(reviewId, body.request.body.value.url);
+      return { data: { review_id: reviewId, summary: QUOTA_SUMMARY, effects: QUOTA_EFFECTS,
+        requires_confirmation: !state.granted,
+        approval_scope: { kind: 'quota_reads', provider: 'codex', granted: state.granted } } };
+    },
+    '/console/execute': body => {
+      assert.ok(reviews.has(body.review_id), 'every read keeps its own owner review');
+      assert.deepEqual(body.approved_effects, QUOTA_EFFECTS, 'the exact owner effects are echoed for every execute');
+      state.executed.push(reviews.get(body.review_id));
+      state.granted = true; // the owner records the grant only after it accepts an execute
+      return accepted(body);
+    },
+    '/console/result': succeeded,
+    '/console/lock': () => { state.granted = false; return { data: { ok: true } }; },
+  };
+  return state;
+}
+
+test('a grouped quota approval is prompted once; parallel and follow-up reads still prepare and execute individually', async t => {
+  const owner = quotaOwner();
+  const reviewed = [];
+  let decision = true;
+  const { guest, host } = await openSession(t, owner.handlers, {
+    review: async details => { reviewed.push(details); return decision; },
+  });
+  const usage = quotaRead('https://chatgpt.com/backend-api/wham/usage');
+  const subscription = quotaRead('https://chatgpt.com/backend-api/subscriptions?account_id=generated');
+  const credits = quotaRead('https://chatgpt.com/backend-api/wham/rate-limit-reset-credits');
+  const parallel = await Promise.all([
+    guest.request('usage', 'management.request', usage),
+    guest.request('subscription', 'management.request', subscription),
+  ]);
+  assert.deepEqual(parallel.map(reply => reply.ok), [true, true]);
+  assert.equal(reviewed.length, 1, 'the second parallel read is covered by the first accepted approval');
+  assert.equal(reviewed[0].summary, QUOTA_SUMMARY);
+  assert.deepEqual(reviewed[0].effects, QUOTA_EFFECTS);
+  assert.equal(reviewed[0].operation, 'management.request');
+  assert.equal((await guest.request('credits', 'management.request', credits)).ok, true);
+  assert.equal(reviewed.length, 1, 'the follow-up read needs no new dialog');
+  assert.equal(host.count('/console/prepare'), 3);
+  assert.equal(host.count('/console/execute'), 3);
+  assert.deepEqual(owner.executed, [usage, subscription, credits].map(read => read.body.value.url));
+  // The bridge keeps no approval memory: whenever the owner asks again, the user is asked again.
+  owner.granted = false;
+  assert.equal((await guest.request('usage-again', 'management.request', usage)).ok, true);
+  assert.equal(reviewed.length, 2);
+  owner.granted = false;
+  decision = false;
+  const declined = await guest.request('usage-declined', 'management.request', usage);
+  assert.deepEqual(declined.error, { code: 'CONSENT_DECLINED' });
+  assert.equal(host.count('/console/execute'), 4, 'a declined review is never executed');
+  assert.equal(owner.granted, false, 'declining records nothing');
+});
+
+test('locking the session ends the grouped approval and a fresh session is asked again', async t => {
+  const owner = quotaOwner();
+  const reviewed = [];
+  const first = await openSession(t, owner.handlers, { review: async details => { reviewed.push(details); return true; } });
+  const usage = quotaRead('https://chatgpt.com/backend-api/wham/usage');
+  assert.equal((await first.guest.request('usage', 'management.request', usage)).ok, true);
+  assert.equal(owner.granted, true);
+  assert.deepEqual((await first.guest.request('lock', 'session.lock', {})).result, { locked: true });
+  await until(() => first.host.count('/console/lock') === 1, 'the lease revocation');
+  assert.equal(owner.granted, false);
+  const second = await openSession(t, owner.handlers, { review: async details => { reviewed.push(details); return true; } });
+  assert.equal((await second.guest.request('usage', 'management.request', usage)).ok, true);
+  assert.equal(reviewed.length, 2, 'a reopened session prompts again');
+});

@@ -44,6 +44,10 @@ CONSOLE_RECEIPT_OPS = frozenset({'result', 'authority_terminal', 'resource_close
 IPC_HANDLERS = 8
 PASSIVE_READ_LIMIT = 1024 * 1024
 _RESULT_CODE = re.compile(r'[A-Z][A-Z0-9_]{0,63}\Z')
+# A config.yaml stamp may be reused for a cached parse only once its newest
+# timestamp is this far in the past. Any later write then lands on a different
+# stamp even with coarse (up to 2s) filesystem timestamp granularity.
+_POLICY_SETTLE_NS = 2_000_000_000
 
 
 def _stamp(st):
@@ -68,12 +72,18 @@ class InstallPolicy:
     Unsupported: a raw external writer that bypasses Hermes's policy writers and
     restores the exact projection between two samples looks like an unrelated
     edit. Revocation is latched; only a new owner samples a new policy.
+
+    The parsed config.yaml result is reused only for the exact identities and
+    epoch it was parsed under, only once that stamp has settled, and every
+    sample still re-reads identities and epoch before and after. It never
+    caches a decision: pinning, revocation and capture()/matches() are unchanged.
     """
     def __init__(self, home, package_root, plugin_key='hermes-cpa'):
         self.home, self.package_root, self.plugin_key = Path(home), Path(package_root), plugin_key
         self._pinned = None
         self._last = None
         self._revoked = False
+        self._parsed = None  # ((identities, epoch), (allowed, projection)); guarded by _gate.
         self._gate = threading.RLock()
 
     def _identities(self):
@@ -125,12 +135,22 @@ class InstallPolicy:
         for _ in range(3):
             before = self._identities()
             if before is None:
+                self._parsed = None
                 return False, None, None, None
             epoch = self._epoch()
-            allowed, projection = self._projection()
-            # Never pin a different file or epoch than the one just parsed.
+            key = (before, epoch)
+            settled = time.time_ns() - max(before[3][3], before[3][4]) > _POLICY_SETTLE_NS
+            if settled and self._parsed is not None and self._parsed[0] == key:
+                allowed, projection = self._parsed[1]
+            else:
+                self._parsed = None  # Failure or race below leaves nothing reusable.
+                allowed, projection = self._projection()
+            # Never pin a different file or epoch than the one just parsed or reused.
             if self._identities() == before and self._epoch() == epoch:
+                if settled:
+                    self._parsed = (key, (allowed, projection))
                 return allowed, before, epoch, projection
+            self._parsed = None
         raise RuntimeError('policy_unavailable')
 
     def _check(self):

@@ -19,6 +19,17 @@ const loadView = () => import(dataUrl(viewSource));
 const html = '<!doctype html><title>cpa</title>';
 const sha256 = crypto.createHash('sha256').update(html).digest('hex');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function replyWithin(promise) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('dialog required')), 2000); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 async function until(predicate, detail) {
   for (let attempt = 0; attempt < 400; attempt += 1) {
     const value = predicate();
@@ -376,4 +387,64 @@ test('late callbacks from an approved review cannot resolve the next effect revi
   currentDialog.props.onClose();
   assert.deepEqual((await second).error, { code: 'CONSENT_DECLINED' });
   assert.deepEqual(opened, [url], 'only the independently approved first effect ran');
+});
+
+test('a grouped quota approval shows one trusted dialog per unlocked session and Lock ends it', async t => {
+  const effects = ['network_destination', 'quota_reads_until_lock'];
+  const summary = 'Read Codex usage windows for credential "codex-a.json"\nApproving this also permits the other fixed ' +
+    'built-in Codex quota/profile reads until you Lock the console or this unlocked session expires.';
+  const view = await openView(t, { dashboard: false });
+  const host = view.hosts[0];
+  const post = host.backend.post;
+  const owner = { granted: false, reviews: new Set(), executed: [] };
+  host.backend.post = async (requestPath, body) => {
+    const route = requestPath.split('?')[0];
+    if (route === '/console/prepare') {
+      owner.reviews.add(`review-${body.request_id}`);
+      return { data: { review_id: `review-${body.request_id}`, summary, effects, requires_confirmation: !owner.granted,
+        approval_scope: { kind: 'quota_reads', provider: 'codex', granted: owner.granted } } };
+    }
+    if (route === '/console/execute') {
+      assert.ok(owner.reviews.has(body.review_id));
+      assert.deepEqual(body.approved_effects, effects);
+      owner.executed.push(body.request_id);
+      owner.granted = true;
+      return { data: { operation_id: body.request_id } };
+    }
+    if (route === '/console/result') {
+      return { data: { operation_id: body.operation_id, state: 'succeeded',
+        result: { status: 200, headers: {}, body: { kind: 'json', value: { ok: true } } } } };
+    }
+    if (route === '/console/lock') owner.granted = false;
+    return post(requestPath, body);
+  };
+  await view.unlock();
+  const guest = await view.connectGuest();
+  const read = url => ({ method: 'POST', path: '/v8/management/requests/api-call', response_kind: 'json', body: {
+    kind: 'json', value: { authIndex: 'codex-index', method: 'GET', url, header: { Authorization: 'Bearer $TOKEN$' } } } });
+  const review = node => node.props.title === 'Review CPA effect';
+  const first = guest.request('usage', 'management.request', read('https://chatgpt.com/backend-api/wham/usage'));
+  const second = guest.request('subscription', 'management.request',
+    read('https://chatgpt.com/backend-api/subscriptions?account_id=generated'));
+  const dialog = await until(() => view.find(review), 'the grouped quota review');
+  assert.equal(dialog.props.description, summary, 'the host dialog states the session-wide scope from the owner');
+  const list = find(dialog.props.children, node => node.type === 'ul');
+  assert.deepEqual(list.children.map(item => item.children.join('')), effects);
+  dialog.props.onConfirm();
+  assert.equal((await first).ok, true);
+  const covered = await replyWithin(second);
+  assert.equal(covered.ok, true, 'the second parallel read ran without a second dialog');
+  assert.equal(view.find(review), undefined);
+  const followup = await replyWithin(
+    guest.request('credits', 'management.request', read('https://chatgpt.com/backend-api/wham/rate-limit-reset-credits')),
+  );
+  assert.equal(followup.ok, true, 'the follow-up read ran without a dialog');
+  assert.deepEqual(owner.executed.length, 3, 'every read keeps its own prepare and execute');
+  await until(() => view.find(node => node.type === 'button' && textOf(node) === 'Lock CPA Console'), 'the lock button');
+  view.find(node => node.type === 'button' && textOf(node) === 'Lock CPA Console').props.onClick();
+  await until(() => phaseOf(view.app) === 'ended', 'the locked console');
+  assert.ok(view.log.includes('host1 post /console/lock'));
+  assert.equal(owner.granted, false, 'Lock ends the grouped approval');
+  assert.equal(view.find(node => node.type === 'button' && textOf(node) === 'Unlock CPA Console'), undefined,
+    'a locked session cannot continue; a new session starts without the approval');
 });

@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from .console_protocol import (ConsoleError, PREFIX, RESULT_LIMIT, WIRE_LIMIT,
                                classify, content_type, decode_bytes, encoded, identifier,
                                management_response, parse_request, part_name, path_value, require)
+from . import console_quota
 from .console_resources import ConsoleResources, RESOURCE_BUFFER_BYTES, native_resource_path
 
 LEASE_SECONDS = 30 * 60
@@ -241,7 +242,8 @@ class OwnerConsoleService:
             lease_id = secrets.token_urlsafe(32)
             lease = {'scope': dict(args['_scope']), 'generation': self.owner.generation,
                      'expires': time.monotonic() + LEASE_SECONDS, 'expires_at': time.time() + LEASE_SECONDS,
-                     'revoked': False, 'policy': captured, 'intent': intent, 'grant': grant}
+                     'revoked': False, 'policy': captured, 'intent': intent, 'grant': grant,
+                     'quota_grants': {}}
             self._leases[lease_id] = lease
             return self._lease_response(lease_id, lease)
 
@@ -381,6 +383,13 @@ class OwnerConsoleService:
         effects, resources, policies = set(), set(), []
         incarnation, routes, dispatches = None, {}, {'quota': set(), 'oauth': {}}
         providers = [self._oauth_provider(request) for request in requests]
+        quota, quota_version = None, 0
+        if len(requests) == 1 and 'request' in args and args.get('egress_destinations') is None:
+            # Sample the credential version BEFORE reading trusted inventory: a replacement completing after
+            # this point is then visible as a version change instead of being stamped onto old facts.
+            with self._gate:
+                quota_version = self._versions.get('credentials', 0)
+            quota = self._quota_read(requests[0])
         if any((r.path.startswith('/v0/management/') and r.path != '/v0/management/config' and
                 not _builtin_oauth(r, provider)) or _quota_plugin(r) is not None or
                (provider is not None and not _builtin_oauth(r, provider))
@@ -391,7 +400,9 @@ class OwnerConsoleService:
             plugin_binding = self._plugin_binding(request, provider, incarnation, routes, dispatches)
             if plugin_binding and plugin_binding['kind'] == 'management':
                 provider = None
-            if provider and request.path.startswith('/v0/'):
+            if quota:
+                group, extra, policy = 'egress', {'network_destination', console_quota.SCOPE_EFFECT}, quota.policy
+            elif provider and request.path.startswith('/v0/'):
                 group, extra, policy = 'oauth', {'oauth_start'}, None
             else:
                 group, extra, policy = classify(request, routes)
@@ -413,7 +424,8 @@ class OwnerConsoleService:
                 if destinations:
                     extra.add('cross_origin_redirect')
             self._oauth_check(request, args['lease_id'])
-            resources.add(group)
+            if not quota:
+                resources.add(group)
             effects.update(extra)
             policies.append(policy)
         prepared = None
@@ -439,36 +451,39 @@ class OwnerConsoleService:
             # Keep digests and native requests, never a second persisted candidate.
             prepared = {k: prepared[k] for k in ('base_revision', 'candidate_revision', 'effects', 'changed_paths')}
             resources.update(('config', 'credentials', 'oauth', 'plugins', 'egress'))
-        elif requests[0].method != 'GET' or effects.intersection({'oauth_start', 'plugin_code'}):
+        elif not quota and (requests[0].method != 'GET' or effects.intersection({'oauth_start', 'plugin_code'})):
             # Native credential/plugin handlers may also rewrite config.yaml.
             resources.add('config')
         mutating = config or requests[0].method != 'GET' or bool(effects.intersection({'oauth_start', 'plugin_code'}))
         write_resources = resources if mutating else set()
         fingerprint = _digest({'requests': values, 'revision': revision, 'policies': policies,
-                               'plugin_binding': plugin_binding})
+                               'plugin_binding': plugin_binding, 'quota': quota.scope() if quota else None})
         self._lease(args)
         with self._gate:
+            if quota:
+                require(self._versions.get('credentials', 0) == quota_version, 'REVIEW_STALE')
             for key, review in self._reviews.items():
                 if review['lease_id'] == args['lease_id'] and review.get('request_id') == request_id:
                     require(review['fingerprint'] == fingerprint, 'REQUEST_CONFLICT')
-                    return self._review_response(key, review)
+                    return self._review_response(key, review, lease)
             require(len(self._reviews) < MAX_REVIEWS, 'BUSY')
             size = raw_size + sum(len(r.body) for r in requests)
             self._space(size)
             review_id = secrets.token_urlsafe(32)
-            summary = self._summary(requests, effects, policies)
+            summary = quota.summary if quota else self._summary(requests, effects, policies)
             if plugin_binding:
                 summary += ('\nInstalled plugin: ' + plugin_binding['plugin_id'] +
                             '\nRegistry revision: ' + plugin_binding['registry_revision'])
             review = {'kind': 'management', 'lease_id': args['lease_id'], 'request_id': request_id,
                       'fingerprint': fingerprint, 'requests': requests, 'effects': sorted(effects),
                       'policies': policies, 'prepared': prepared, 'revision': revision,
-                      'plugin_binding': plugin_binding,
+                      'plugin_binding': plugin_binding, 'quota': quota.scope() if quota else None,
+                      'quota_version': quota_version,
                       'oauth_provider': provider,
                       'resources': write_resources, 'versions': {r: self._versions.get(r, 0) for r in resources},
                       'expires': time.monotonic() + REVIEW_SECONDS, 'summary': summary, 'size': size}
             self._reviews[review_id] = review
-            return self._review_response(review_id, review)
+            return self._review_response(review_id, review, lease)
 
     @staticmethod
     def _summary(requests, effects, policies):
@@ -498,11 +513,64 @@ class OwnerConsoleService:
             summary += '\nEffects: ' + ', '.join(sorted(effects))
         return summary
 
-    @staticmethod
-    def _review_response(key, review):
-        return {'ok': True, 'review_id': key, 'summary': review['summary'],
-                'effects': review['effects'], 'requires_confirmation': bool(review['effects']),
-                'revision': review.get('revision')}
+    def _quota_read(self, request):
+        """Trusted-inventory proof that a fixed quota template belongs to its credential, or None."""
+        candidate = console_quota.match(request)
+        if candidate is None:
+            return None
+        try:
+            response = self.transport.request('GET', PREFIX + '/credentials', timeout=self._timeout(2.),
+                                              max_response=RESULT_LIMIT)
+            if response.status != 200:
+                return None
+            return console_quota.verify(candidate, json.loads(response.body).get('files'))
+        except Exception:
+            return None
+
+    def _quota_current(self, review):
+        """Caller holds the gate. A quota read depends on, but never reserves or bumps, the credentials version."""
+        return (self._versions.get('credentials', 0) == review['quota_version'] and
+                'credentials' not in self._active)
+
+    def _quota_granted(self, lease, review):
+        """True while this lease holds an accepted approval for this review's identity and credential version."""
+        quota, current = review['quota'], self._versions.get('credentials', 0)
+        grant = lease['quota_grants'].get(quota['key'])
+        if grant is None:
+            return False
+        fresh = review['quota_version'] == current
+        if grant[1] != current or fresh and grant[0] != quota['identity']:
+            del lease['quota_grants'][quota['key']]
+            return False
+        return fresh and grant[0] == quota['identity']
+
+    def _grant_quota(self, review, lease):
+        """Remember the human approval only after the owner accepted the execute."""
+        quota = review.get('quota')
+        if not quota:
+            return
+        try:
+            self._policy(lease)
+        except ConsoleError:
+            return
+        with self._gate:
+            grants = lease['quota_grants']
+            if lease['revoked'] or lease['expires'] <= time.monotonic() or \
+                    lease['generation'] != self.owner.generation or not self._quota_current(review):
+                return
+            if quota['key'] in grants or len(grants) < console_quota.MAX_GRANTS_PER_LEASE:
+                # Never a newer version than the one the identity was proven under.
+                grants[quota['key']] = (quota['identity'], review['quota_version'])
+
+    def _review_response(self, key, review, lease=None):
+        quota = review.get('quota')
+        granted = quota is not None and lease is not None and self._quota_granted(lease, review)
+        response = {'ok': True, 'review_id': key, 'summary': review['summary'],
+                    'effects': review['effects'], 'requires_confirmation': bool(review['effects']) and not granted,
+                    'revision': review.get('revision')}
+        if quota:
+            response['approval_scope'] = {'kind': 'quota_reads', 'provider': quota['provider'], 'granted': granted}
+        return response
 
     def _approved_review(self, args, kind):
         review_id = args.get('review_id')
@@ -532,6 +600,7 @@ class OwnerConsoleService:
                 require(request_id not in self._results, 'REQUEST_CONFLICT')
                 require(all(self._versions.get(r, 0) == v for r, v in review['versions'].items()), 'RESOURCE_CONFLICT')
                 require(not any(r in self._active for r in review['resources']), 'RESOURCE_CONFLICT')
+                require(not review.get('quota') or self._quota_current(review), 'REVIEW_STALE')
                 require(len(self._results) < MAX_RESULTS, 'BUSY')
                 self._space(WIRE_LIMIT)
                 require(review['revision'] == self._revision(), 'STALE_REVISION')
@@ -547,6 +616,8 @@ class OwnerConsoleService:
         receipt = self.owner.submit(intent)
         if receipt.get('ok') is False:
             self.job_rejected(intent, receipt.get('code', 'UNAVAILABLE'))
+        else:
+            self._grant_quota(review, lease)
         return receipt
 
     def _result(self, args, lease):
@@ -607,6 +678,15 @@ class OwnerConsoleService:
             else:
                 request = review['requests'][0]
                 self._oauth_check(request, args['lease_id'])
+                if review.get('quota'):
+                    # The credential may have been replaced since the review; verify before anything is sent,
+                    # with the credential version unchanged on both sides of the trusted inventory read.
+                    with self._gate:
+                        require(self._quota_current(review), 'REVIEW_STALE')
+                    current = self._quota_read(request)
+                    with self._gate:
+                        require(self._quota_current(review), 'REVIEW_STALE')
+                    require(current is not None and current.identity == review['quota']['identity'], 'REVIEW_STALE')
                 binding = review['plugin_binding']
                 provider = review['oauth_provider']
                 headers = {}

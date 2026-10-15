@@ -12,6 +12,9 @@ export const REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
 export const HANDSHAKE_TIMEOUT_MS = 10 * 1000;
 // Longest lifetime the owner ever grants a native resource; the owner's clock stays the expiry authority.
 export const RESOURCE_MAX_LIFETIME_MS = 5 * 60 * 1000;
+// Pending/running receipts are polled after 50, 100, 200, 400, 800 then 1000 ms (the cap). Failed or malformed
+// polls keep their own, slower backoff from RESULT_POLL_INTERVAL_MS to RESULT_POLL_MAX_INTERVAL_MS.
+export const RESULT_POLL_START_MS = 50;
 export const RESULT_POLL_INTERVAL_MS = 1000;
 export const RESULT_POLL_MAX_INTERVAL_MS = 5000;
 export const RESULT_POLL_TIMEOUT_MS = 2 * 60 * 1000;
@@ -271,6 +274,7 @@ export function createTrustedLauncherSession({
     throw new Error('Trusted launcher session requires captured host capabilities');
   }
   const pollIntervalMs = timing.pollIntervalMs ?? RESULT_POLL_INTERVAL_MS;
+  const pollStartMs = Math.min(timing.pollStartMs ?? RESULT_POLL_START_MS, pollIntervalMs);
   const pollMaxIntervalMs = timing.pollMaxIntervalMs ?? RESULT_POLL_MAX_INTERVAL_MS;
   const revokeRetryMs = timing.revokeRetryMs ?? REVOKE_RETRY_MS;
 
@@ -431,6 +435,7 @@ export function createTrustedLauncherSession({
     const receipt = fields => onReceipt({ profile, document_id: documentId, operation_id: operationId, ...fields });
     const deadline = Date.now() + REQUEST_TIMEOUT_MS;
     let delay = pollIntervalMs;
+    let pendingDelay = pollStartMs;
     while (!closed && Date.now() < deadline) {
       let result;
       try {
@@ -463,7 +468,8 @@ export function createTrustedLauncherSession({
       if (state === 'succeeded') return { withheld: true, requiresUnlock: result.requires_unlock === true };
       if (state === 'failed') throw new LauncherError(typeof result.code === 'string' ? result.code : 'FAILED');
       if (state === 'unknown') throw new LauncherError('OUTCOME_UNKNOWN');
-      await wait(pollIntervalMs);
+      await wait(pendingDelay);
+      pendingDelay = Math.min(pendingDelay * 2, pollIntervalMs);
     }
     receipt({ state: 'unknown' });
     throw new LauncherError('OUTCOME_UNKNOWN');

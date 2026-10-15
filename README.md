@@ -66,12 +66,14 @@ The unlocked document runs the full pinned upstream application, not the earlier
 | --- | --- |
 | Configuration and providers | Full pinned configuration UI, public API keys, upstream provider settings, model mappings and native validation; reviewed changes use revision checks. |
 | OAuth and credentials | Native authorization start/status/callback/cancellation; credential import, export, enable/disable, metadata editing, refresh and deletion. |
-| Usage, logs and quota | Pinned upstream views and operations through the scoped management transport; effectful requests require trusted review. |
+| Usage, logs and quota | Pinned upstream views through the scoped transport. Fixed built-in quota/profile reads share one account-scoped approval per unlocked session; other effects retain trusted review. |
 | Native plugins | Registry/install/configuration and native extension operations, bound to the reviewed plugin incarnation. Plugin pages receive separate resource grants. |
 
 CPAMC is a privileged credential editor after unlock: user-managed CPA/provider keys and OAuth account files may enter that document. Hermes session tokens, private owner authority and broker signing authority never do. Browser storage and direct guest network access remain blocked.
 
 Mutations require trusted review. Accepted operations reconcile by receipt rather than being replayed after an uncertain reply. Locking, host/profile retirement and generation changes end the document's authority. Native plugin GET resources can have effects and are also single-attempt; an uncertain response is not reported as “not invoked.”
+
+One quota approval is not blanket network consent. The owner verifies the selected credential and exact built-in request template; matching reads cannot change destinations, headers, bodies or proxies, or follow redirects. Lock/expiry/profile changes end the session permission. See [session approval security](hermes-cpa/README.md#session-approval-security).
 
 Desktop external links use the native opener. Dashboard links display their exact URL in a trusted prompt and require a fresh user gesture before opening a separate page. Imports are bounded at 10 MiB and exports at 32 MiB. Native plugin pages cannot inherit Hermes cookies, authentication headers or the console bridge.
 

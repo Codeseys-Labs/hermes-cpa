@@ -63,9 +63,48 @@ gesture on the trusted launcher prompt. File import and export are bounded at
 10 MiB and 32 MiB respectively.
 
 Conflicting management requests are queued through their terminal receipts before
-the next review is prepared. Quota refreshes can require separate approvals for
-usage, subscription and reset-credit reads. Known read-only management routes
-still overlap; arbitrary plugin handlers do not.
+the next review is prepared. Known read-only management routes still overlap;
+arbitrary plugin handlers do not. Pending receipts use short, growing poll waits,
+without resubmitting accepted operations.
+
+The first matching Codex, Claude or Antigravity quota/profile read asks for one
+account-scoped approval until Lock or session expiry. Matching follow-up reads
+keep their own owner reviews, host grants and receipts but need no further modal.
+The owner verifies the credential against native inventory and accepts only fixed
+methods, URLs, headers, queries and bodies. Redirects are refused. Unknown request
+shapes, other credentials, arbitrary network calls, inference, resets, credit
+consumption, credential changes and plugin actions retain their ordinary prompts.
+Managed credential changes and changed account identity invalidate remembered
+approval. Normal token refresh for the same account does not expand its scope.
+
+### Session approval security
+
+OAuth/provider credentials and account data are confidential. Hermes session
+tokens and private owner/broker authority remain restricted to the host. Explicit
+unlock is retained because the console is a credential editor; Lock, expiry,
+selection retirement and policy/generation changes revoke its authority.
+
+```mermaid
+flowchart LR
+    Guest[CPAMC document] -. Request .-> Host[Trusted launcher]
+    Host -->|First scoped approval and every review| Owner[Owner lease]
+    Owner -->|Private control and fixed egress policy| CPA[Owned CPA]
+    CPA -->|Trusted credential metadata| Owner
+    CPA -. HTTPS, no redirects .-> Provider[Fixed provider endpoint]
+```
+
+| Component | Threat | Control | Status |
+| --- | --- | --- | --- |
+| CPAMC document | Spoofed quota request inherits network consent | Owner matches fixed templates and verifies credential/provider/account identity | Mitigated |
+| Trusted launcher | A one-request prompt conceals broader consent | The first prompt explicitly names the account and permission lifetime | Mitigated |
+| Owner lease | A prepared no-modal review survives credential replacement | Credential version is checked during preparation, acceptance and dispatch; grants retain that version | Mitigated |
+| CPA egress | A redirect discloses a substituted credential | Fixed HTTPS destination and method; no redirects, Host overrides or explicit proxies | Mitigated |
+| Policy sampler | Cached YAML hides a disable or replacement | Identity/epoch checks still run before and after reuse; recent or future-dated stamps reparse | Mitigated |
+| Provider | Repeated approved reads exhaust provider limits | Existing request bounds and lease expiry remain; provider errors are not replayed | Accepted |
+
+These controls assume the patched host and native CPA binary are trusted. Native
+plugin code and a compromised local account are outside the sandbox's protection.
+Recheck this model when templates, credential identity or approval lifetime change.
 
 Native plugin pages use a separate resource grant, not the console management
 channel. A grant authorizes an exact resource for the reviewed plugin incarnation;

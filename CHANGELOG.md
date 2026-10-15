@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Added once-per-unlocked-session approval for fixed Codex, Claude and Antigravity quota/profile reads, bound to trusted credential identity and managed credential versions. Arbitrary network calls, writes, credit consumption, resets and plugin effects still prompt. Explicit unlock and revocation remain.
+- Cached unchanged YAML policy projections while preserving identity/epoch revalidation, strict accepted-operation revocation and clock-rollback checks. Reduced pending-receipt poll waits without replaying operations.
+- Measured the live Windows-to-WSL console: unlock to frame decreased from 3.50 s to 1.32 s, Auth Files navigation from 3.70 s to 1.23 s, and median three-run credential refresh from 4.62 s to 1.31 s. These are local observations, not performance guarantees.
+
 ## snapshot-2026-10-15
 
 - Accepted the private patched-Hermes working snapshot, including WSL inference, 22 enrolled homes, three migrated OAuth accounts and live Codex quota display. Stock Hermes and generally packaged Windows releases remain unqualified.
