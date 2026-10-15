@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased — staged integration candidate
+## snapshot-2026-10-15
 
+- Accepted the private patched-Hermes working snapshot, including WSL inference, 22 enrolled homes, three migrated OAuth accounts and live Codex quota display. Stock Hermes and generally packaged Windows releases remain unqualified.
+- Fixed hot-mounted console route guard initialization, kept enrolled key helpers independent of ambient Hermes dependencies, and widened psutil admission to match Hermes core.
 - Replaced the read-oriented hosted UI with the full pinned CPAMC 1.25.6 application in Agent Dashboard and the optional Desktop workspace, including configuration, provider keys, OAuth, credential lifecycle, quota and native-plugin interfaces.
 - Made trusted unlock explicitly authorize user-managed CPA/provider credentials in the console while retaining Hermes session tokens and private owner/broker authority in the host. Mutations use reviewed, scoped execution and receipt reconciliation rather than replay.
 - Moved managed control and inference to the checksum-pinned `hermes-owner-v1` runtime's private Unix channels. Public CPA settings no longer retarget the owner or enrolled broker; legacy private-key roots require an explicit transition rather than silent migration.
@@ -20,6 +22,7 @@
 - Qualified the native Windows development UI with generated OAuth and API keys, exact native-page checks, private named-pipe control, pre-import session guards, clean-exit evidence and post-quiescence persistence checks. Guard diagnostics emit fixed redacted destination categories, never arbitrary hostnames.
 - Revalidated native HTTP resource authority throughout delivery, including blocked sends. Revocation aborts incomplete delivery before releasing its buffer reservation; bytes already accepted by the transport cannot be recalled.
 - Updated the maintained isolated stack to private-channel CPA in a fresh root, retaining the previous root and the original generated Hermes token. Image/root selection is stored separately from credentials; the explicit permit does not auto-renew.
+- Serialized conflicting hosted management requests through preparation, approval, execution and terminal receipts. Parallel quota checks no longer invalidate sibling reviews or lock the console; known read-only routes still overlap, and every network request retains its own approval.
 
 ## Earlier staged integration — `2cc259e`
 
@@ -44,4 +47,4 @@ The full-console work above supersedes this candidate's mutation deferral and se
 - Added behavioral regressions and exercised the real pinned CPA process, isolated Hermes CLI, WSL backend and Windows development Desktop with generated credentials.
 - Removed obsolete private-path desktop probes; excluded local qualification state, credentials and dependencies from publication.
 
-Release acceptance and the qualified minimum Desktop version remain unset. No live deployment or upstream credential migration is included.
+The earlier staged candidate had no release acceptance or live deployment. The private working snapshot above supersedes that state; a minimum generally supported Desktop version remains unset.

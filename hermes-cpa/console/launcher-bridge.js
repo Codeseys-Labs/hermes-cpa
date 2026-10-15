@@ -206,6 +206,16 @@ function isEffectful(operation, payload) {
   return operation !== 'session.lock';
 }
 
+// May share the management lifecycle lane. The owner treats any GET reaching plugin code (declared /v0/management
+// routes, per-plugin quota, OAuth auth URLs) as mutating, so only core /v8/management reads and two plain reads qualify.
+function isReadOnlyManagement(operation, payload) {
+  if (operation !== 'management.request' || payload.method !== 'GET') return false;
+  const path = payload.path.split('?')[0];
+  if (path.includes('%')) return false;
+  if (path === '/v1/models' || path === '/v0/management/config') return true;
+  return path.startsWith('/v8/management/') && !/^\/v8\/management\/(?:oauth\/auth-url|plugins\/[^/]+\/quota)$/.test(path);
+}
+
 /**
  * A new browser tab needs fresh trusted user activation, which the asynchronous review round trip has already
  * spent, and `window.open(..., 'noopener')` cannot report a blocked popup. The outer UI therefore renders the
@@ -285,6 +295,31 @@ export function createTrustedLauncherSession({
     const next = backendTail.then(task, task);
     backendTail = next.catch(() => undefined);
     return next;
+  };
+
+  // The owner pins each review to resource versions and answers a stale execute with RESOURCE_CONFLICT, which
+  // this bridge must treat as OUTCOME_UNKNOWN. Mutating requests therefore run prepare..receipt alone, FIFO;
+  // provably read-only ones share the lane.
+  const lifecycleQueue = [];
+  let lifecycleReaders = 0;
+  let lifecycleWriter = false;
+  const pumpLifecycle = () => {
+    while (lifecycleQueue.length) {
+      const next = lifecycleQueue[0];
+      if (lifecycleWriter || (next.exclusive && lifecycleReaders > 0)) return;
+      lifecycleQueue.shift();
+      if (next.exclusive) lifecycleWriter = true; else lifecycleReaders += 1;
+      next.grant();
+    }
+  };
+  const lifecycle = async (exclusive, task) => {
+    await new Promise(grant => { lifecycleQueue.push({ exclusive, grant }); pumpLifecycle(); });
+    try {
+      return await task();
+    } finally {
+      if (exclusive) lifecycleWriter = false; else lifecycleReaders -= 1;
+      pumpLifecycle();
+    }
   };
 
   const send = async (path, body, options) => {
@@ -437,37 +472,41 @@ export function createTrustedLauncherSession({
   const management = async (operation, payload, requestId) => {
     if (operation === 'management.request') validateManagementRequest(payload);
     else validateTransaction(payload);
-    // Guest counters restart on remount; keep same-document IDs stable without exposing document authority.
-    const digest = await crypto.subtle.digest('SHA-256', textEncoder.encode(JSON.stringify([documentId, requestId])));
-    const ownerRequestId = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
-    const first = {
-      lease_id: leaseId,
-      document_id: documentId,
-      request_id: ownerRequestId,
-      ...(operation === 'management.request'
-        ? { request: payload }
-        : { requests: payload.requests, expected_revision: payload.expected_revision }),
-    };
-    let dispatched = false;
-    let receipt;
-    try {
-      receipt = await reviewThenExecute('/console/prepare', first, { operation, requestId: ownerRequestId }, (prepared) => {
-        dispatched = true;
-        const entry = inflight.get(requestId);
-        if (entry && prepared.effects.length > 0) entry.effectful = true;
-      });
-    } catch (error) {
-      // After approval only an explicit refusal before forwarding proves that nothing ran.
-      if (dispatched && error?.notForwarded !== true) throw new LauncherError('OUTCOME_UNKNOWN');
-      throw error;
-    }
-    // The execute call returned, so the operation was accepted: from here only a terminal receipt is definitive.
-    if (!record(receipt) || !safeId(receipt.operation_id)) throw new LauncherError('OUTCOME_UNKNOWN');
-    onReceipt({ profile, document_id: documentId, request_id: ownerRequestId, operation_id: receipt.operation_id, state: 'accepted' });
-    const terminal = await resultFor(receipt.operation_id);
-    if (terminal.requiresUnlock) setTimeout(() => close(), 0);
-    if (terminal.withheld) throw new LauncherError('RESULT_WITHHELD');
-    return terminal.response;
+    // Queued synchronously in guest order; a request abandoned while queued never reaches the owner.
+    return lifecycle(!isReadOnlyManagement(operation, payload), async () => {
+      if (closed || !inflight.has(requestId)) throw new LauncherError('UNAVAILABLE', 'UNAVAILABLE', { notForwarded: true });
+      // Guest counters restart on remount; keep same-document IDs stable without exposing document authority.
+      const digest = await crypto.subtle.digest('SHA-256', textEncoder.encode(JSON.stringify([documentId, requestId])));
+      const ownerRequestId = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+      const first = {
+        lease_id: leaseId,
+        document_id: documentId,
+        request_id: ownerRequestId,
+        ...(operation === 'management.request'
+          ? { request: payload }
+          : { requests: payload.requests, expected_revision: payload.expected_revision }),
+      };
+      let dispatched = false;
+      let receipt;
+      try {
+        receipt = await reviewThenExecute('/console/prepare', first, { operation, requestId: ownerRequestId }, (prepared) => {
+          dispatched = true;
+          const entry = inflight.get(requestId);
+          if (entry && prepared.effects.length > 0) entry.effectful = true;
+        });
+      } catch (error) {
+        // After approval only an explicit refusal before forwarding proves that nothing ran.
+        if (dispatched && error?.notForwarded !== true) throw new LauncherError('OUTCOME_UNKNOWN');
+        throw error;
+      }
+      // The execute call returned, so the operation was accepted: from here only a terminal receipt is definitive.
+      if (!record(receipt) || !safeId(receipt.operation_id)) throw new LauncherError('OUTCOME_UNKNOWN');
+      onReceipt({ profile, document_id: documentId, request_id: ownerRequestId, operation_id: receipt.operation_id, state: 'accepted' });
+      const terminal = await resultFor(receipt.operation_id);
+      if (terminal.requiresUnlock) setTimeout(() => close(), 0);
+      if (terminal.withheld) throw new LauncherError('RESULT_WITHHELD');
+      return terminal.response;
+    });
   };
 
   const browser = async (action, payload) => {

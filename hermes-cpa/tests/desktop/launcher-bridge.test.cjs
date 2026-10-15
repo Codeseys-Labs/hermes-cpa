@@ -227,6 +227,7 @@ function fixture(handlers) {
 
 function connectGuest(session) {
   const waiting = new Map();
+  const timers = new Set();
   const state = { locked: false };
   let port;
   let sessionId;
@@ -251,11 +252,28 @@ function connectGuest(session) {
   return {
     state,
     ready,
-    request: (id, operation, payload) => new Promise(resolve => {
-      waiting.set(id, resolve);
+    // Bounded: a closed session or a missing reply rejects the guest promise instead of hanging the suite.
+    request: (id, operation, payload, timeoutMs = 10_000) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        waiting.delete(id);
+        timers.delete(timer);
+        reject(new Error(`no reply to guest request ${id} within ${timeoutMs}ms (locked=${state.locked})`));
+      }, timeoutMs);
+      timers.add(timer);
+      waiting.set(id, data => {
+        clearTimeout(timer);
+        timers.delete(timer);
+        waiting.delete(id);
+        resolve(data);
+      });
       port.postMessage({ type: 'hermes:cpa:request', protocol: 3, session_id: sessionId, id, operation, payload });
     }),
-    close: () => port?.close(),
+    close: () => {
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+      waiting.clear();
+      port?.close();
+    },
   };
 }
 
@@ -552,6 +570,162 @@ test('every other failure after approval stays OUTCOME_UNKNOWN and locks', async
     assert.ok(states.includes('outcome-unknown'));
     await until(() => host.count('/console/lock') === 1, 'lock after an ambiguous execute');
   }
+});
+
+// ---- owner resource-version semantics (OwnerConsoleService._prepare/_execute/_release) ----
+// A review pins its groups' versions at prepare; execute answers 409 RESOURCE_CONFLICT if a pinned version moved or a
+// conflicting write is active; completing a write releases its groups and advances their versions.
+const ownerConflict = () => Object.assign(new Error('Conflict'), {
+  name: 'ApiError', status: 409,
+  body: JSON.stringify({ api_version: 1, error: { code: 'RESOURCE_CONFLICT', message: 'Resource conflict', retryable: false } }),
+});
+// The owner treats non-GET and any GET that reaches plugin code as mutating.
+const mutatesOwner = request => request.method !== 'GET' ||
+  /^\/v0\/management\/|\/plugins\/[^/]+\/quota$|\/oauth\/auth-url$/.test(request.path);
+/** `holdReadsUntilPrepares`: read results stay running until that many prepares happened, proving overlap. */
+function versionedOwner({ holdReadsUntilPrepares = 0 } = {}) {
+  const versions = {};
+  const active = {};
+  const reviews = new Map();
+  const results = new Map();
+  const events = [];
+  const count = kind => events.filter(event => event.startsWith(`${kind}:`)).length;
+  return {
+    events,
+    count,
+    handlers: {
+      '/console/prepare': body => {
+        const write = mutatesOwner(body.request);
+        const resources = write ? ['egress', 'config'] : ['config'];
+        events.push(`prepare:${body.request.path}`);
+        reviews.set(`review-${body.request_id}`, {
+          write, resources, versions: Object.fromEntries(resources.map(resource => [resource, versions[resource] ?? 0])),
+        });
+        return { data: {
+          review_id: `review-${body.request_id}`, summary: `${body.request.method} ${body.request.path}`,
+          effects: write ? ['network_destination'] : [], requires_confirmation: write,
+        } };
+      },
+      '/console/execute': body => {
+        const review = reviews.get(body.review_id);
+        if (!review.accepted) {
+          if (Object.entries(review.versions).some(([resource, version]) => (versions[resource] ?? 0) !== version)) throw ownerConflict();
+          if (review.write && review.resources.some(resource => resource in active)) throw ownerConflict();
+          if (review.write) for (const resource of review.resources) active[resource] = body.request_id;
+          review.accepted = true;
+          results.set(body.request_id, { review, polls: 0 });
+          events.push(`execute:${body.request_id}`);
+        }
+        return { data: { operation_id: body.request_id } };
+      },
+      '/console/result': body => {
+        const result = results.get(body.operation_id);
+        result.polls += 1;
+        const held = !result.review.write && count('prepare') < holdReadsUntilPrepares;
+        if (result.polls < 3 || held) return { data: { operation_id: body.operation_id, state: 'running' } };
+        if (!result.done) {
+          result.done = true;
+          if (result.review.write) {
+            for (const resource of result.review.resources) {
+              delete active[resource];
+              versions[resource] = (versions[resource] ?? 0) + 1;
+            }
+          }
+          events.push(`done:${body.operation_id}`);
+        }
+        return succeeded(body);
+      },
+      '/console/lock': () => ({ data: { ok: true } }),
+    },
+  };
+}
+const kinds = events => events.map(event => event.split(':')[0]);
+const BOUND_MS = 1500;
+const quotaRequest = name => ({
+  method: 'POST', path: '/v8/management/requests/api-call',
+  body: { kind: 'json', value: { auth_index: name, method: 'GET', url: 'https://quota.invalid/usage' } }, response_kind: 'json',
+});
+const getRequest = path => ({ method: 'GET', path, body: { kind: 'empty' }, response_kind: 'json' });
+
+test('concurrent api-call requests each prepare, review, execute and settle against the owner version rules', async t => {
+  const owner = versionedOwner();
+  const reviewed = [];
+  const { guest, host, states, receipts } = await openSession(t, owner.handlers, {
+    review: async details => { reviewed.push(details.summary); await pause(3); return true; },
+  });
+  // Usage and subscription are issued together, as the Codex quota fetch does.
+  const [usage, subscription] = await Promise.all([
+    guest.request('usage', 'management.request', quotaRequest('usage'), BOUND_MS),
+    guest.request('subscription', 'management.request', quotaRequest('subscription'), BOUND_MS),
+  ]);
+  assert.equal(usage.ok, true, JSON.stringify(usage));
+  assert.equal(subscription.ok, true, JSON.stringify(subscription));
+  assert.equal(states.includes('outcome-unknown'), false, 'a stale sibling review must not lock the document');
+  assert.equal(host.count('/console/lock'), 0);
+  assert.equal(reviewed.length, 2, 'each api-call keeps its own trusted review');
+  assert.equal(host.count('/console/execute'), 2, 'nothing is submitted twice to repair a conflict');
+  const accepted = receipts.filter(receipt => receipt.state === 'accepted').map(receipt => receipt.operation_id);
+  assert.equal(accepted.length, 2);
+  assert.deepEqual(receipts.filter(receipt => receipt.state === 'succeeded').map(receipt => receipt.operation_id).sort(), [...accepted].sort());
+  assert.deepEqual(kinds(owner.events), ['prepare', 'execute', 'done', 'prepare', 'execute', 'done'],
+    'the second review is prepared only after the first released its resource groups');
+});
+
+test('read-only requests share the lifecycle lane; a read queued behind a write prepares only after it settles', async t => {
+  const owner = versionedOwner({ holdReadsUntilPrepares: 2 });
+  const { guest } = await openSession(t, owner.handlers);
+  // Neither read can settle until both were prepared, so serialized reads fail instead of passing by timing.
+  const reads = await Promise.all([
+    guest.request('read-1', 'management.request', readRequest, BOUND_MS),
+    guest.request('read-2', 'management.request', readRequest, BOUND_MS),
+  ]);
+  assert.deepEqual(reads.map(reply => reply.ok), [true, true]);
+  const firstDone = kinds(owner.events).indexOf('done');
+  assert.equal(kinds(owner.events.slice(0, firstDone)).filter(kind => kind === 'prepare').length, 2);
+
+  owner.events.length = 0;
+  const [write, read] = await Promise.all([
+    guest.request('write', 'management.request', quotaRequest('usage'), BOUND_MS),
+    guest.request('read-after-write', 'management.request', readRequest, BOUND_MS),
+  ]);
+  assert.equal(write.ok, true, JSON.stringify(write));
+  assert.equal(read.ok, true, JSON.stringify(read));
+  assert.ok(owner.events.findIndex(event => event === 'prepare:/v8/management/config') > kinds(owner.events).indexOf('done'));
+});
+
+test('GET routes that can reach plugin code serialize like writes', async t => {
+  const owner = versionedOwner();
+  const { guest, states } = await openSession(t, owner.handlers);
+  const replies = await Promise.all([
+    guest.request('quota', 'management.request', getRequest('/v8/management/plugins/demo/quota'), BOUND_MS),
+    guest.request('route', 'management.request', getRequest('/v0/management/demo/status'), BOUND_MS),
+    guest.request('auth', 'management.request', { ...getRequest('/v8/management/oauth/auth-url'), query: { provider: 'demo' } }, BOUND_MS),
+  ]);
+  assert.deepEqual(replies.map(reply => reply.ok), [true, true, true], JSON.stringify(replies));
+  assert.equal(states.includes('outcome-unknown'), false);
+  assert.deepEqual(kinds(owner.events), ['prepare', 'execute', 'done', 'prepare', 'execute', 'done', 'prepare', 'execute', 'done']);
+});
+
+test('a request queued behind an open review never reaches the owner once the session closes', async t => {
+  const owner = versionedOwner();
+  let approve;
+  const approval = new Promise(resolve => { approve = resolve; });
+  let reviews = 0;
+  const { session, guest, host } = await openSession(t, owner.handlers, {
+    review: async () => { reviews += 1; return approval; },
+  });
+  const settled = [
+    guest.request('first', 'management.request', quotaRequest('usage'), BOUND_MS),
+    guest.request('queued', 'management.request', quotaRequest('subscription'), BOUND_MS),
+  ].map(reply => reply.catch(() => undefined));
+  await until(() => reviews === 1, 'the first review');
+  await session.close();
+  approve(true);
+  await Promise.all(settled);
+  await pause(10);
+  assert.equal(host.count('/console/prepare'), 1, 'the queued request never prepared');
+  assert.equal(host.count('/console/execute'), 0, 'nothing is submitted after the session closed');
+  assert.equal(reviews, 1);
 });
 
 test('revocation retries a refusal that never reached the owner, ignores other failures, and never queues behind a hung call', async t => {

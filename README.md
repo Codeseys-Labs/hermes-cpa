@@ -2,7 +2,7 @@
 
 Private staged integration of [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), its full pinned management console, and Hermes Agent. The agent plugin owns CPA and a local inference broker. CPAMC is available through the Agent Dashboard without Desktop; the optional desktop component opens the same console in a docked workspace beside chat, using the Monitoring Dashboard workspace mechanism.
 
-**Candidate, not a production release.** Stock Hermes does not provide the required host contract. Release acceptance remains false and the minimum qualified Desktop version remains unset. Source publication does not authorize installation into an existing live profile.
+**Private working snapshot, not stock-Hermes or packaged-Windows certification.** `snapshot-2026-10-15` accepts the patched Hermes 0.21.6 integration used by the live WSL backend and Windows development Desktop. Stock Hermes lacks the required host contract; a minimum generally supported Desktop version remains unset.
 
 ## Repository
 
@@ -27,6 +27,8 @@ git apply /path/to/hermes-cpa/host-integration/patches/0001-scoped-cpa-host-cont
 
 Prepare that checkout using its own installation instructions. The contract adds authenticated request/selection/operation authority, zero-TTL request grants, scoped plugin-policy epochs, and native CLI execution within the isolated plugin host. A version string alone is insufficient: managed setup checks these capabilities before side effects.
 
+The Dashboard/Desktop console requires `plugins.isolation: host` in the owning Hermes configuration. The optional Desktop half must be enabled separately. The tested Windows development build uses Hermes commit `302c5d9f67` with the Desktop host patch; WSL uses the pinned revision above. These are patched checkouts, not a self-contained Desktop installer. Save host changes before `hermes update`; an update can conflict with or replace the required contract.
+
 Authenticate Git to the private repository as an authorized user. Install the package subdirectory through the patched Hermes CLI, pinning an exact published commit:
 
 ```sh
@@ -36,7 +38,7 @@ hermes plugins install 'https://github.com/baladithyab/hermes-cpa.git#hermes-cpa
 
 This installs disabled without changing the shared Python environment. Review the installer security scan and dependency plan before enabling with `hermes plugins enable hermes-cpa`. Do not bypass scan or dependency-admission refusals. Dependencies are declared in `pyproject.toml` and `plugin.yaml`; bcrypt is required for managed onboarding. A Python wheel alone lacks the console resources and is not a complete managed installation.
 
-Registration is inert until explicitly configured. For qualification, the supported managed entry point is:
+Registration is inert until explicitly configured. The supported managed entry point is:
 
 ```sh
 hermes cpa setup --download --consent
@@ -44,7 +46,7 @@ hermes cpa setup --download --consent
 hermes cpa setup --archive /path/to/CLIProxyAPI_8.0.21_hermes-owner-v1_linux_amd64.tar.gz --consent
 ```
 
-The candidate release gate intentionally refuses these commands without an explicit, expiring, home/package/manifest-bound isolated-validation permit (`--isolated-authorization`). The integration tests create such permits only in generated temporary homes. This is not a production-install workaround. The pinned pair is CPA 8.0.21 with the `hermes-owner-v1` integration and CPAMC 1.25.6, on Linux amd64. A stock CPA archive is not interchangeable. `--download` uses authenticated `gh` to fetch the exact private candidate asset and verifies its size and SHA-256; it never falls back to a public binary.
+Accepted private snapshots permit explicit managed setup on the documented patched host. Unaccepted builds require an expiring, home/package/manifest-bound isolated-validation permit (`--isolated-authorization`); those permits authorize generated-data qualification, not live installation. The pinned pair is CPA 8.0.21 with the `hermes-owner-v1` integration and CPAMC 1.25.6, on Linux amd64. A stock CPA archive is not interchangeable. `--download` uses authenticated `gh` to fetch the exact private runtime asset and verifies its size and SHA-256; it never falls back to a public binary.
 
 ## Managed behavior
 
@@ -223,7 +225,9 @@ docker run --rm --init --network none --read-only --tmpfs /tmp:rw,exec,mode=1777
 
 The default command runs the plugin suite. Override it for host suites under `/opt/q/host/tests` or the qualification unittest suite. The private executable tmpfs lets integration tests launch their verified CPA binaries; the root filesystem stays read-only. The test layer is not the maintained runtime deployment. Desktop boundary tests run from the checkout with the console's installed development dependencies and `HERMES_CPA_TEST_PYTHON` pointing to the qualified Python environment.
 
-Observed in the current isolated qualification:
+The working snapshot additionally exercised live WSL inference through Claude, GPT and Gemini, enrollment/key helpers for 22 Hermes homes, three migrated OAuth accounts, and Codex quota display in the Windows development Desktop. Claude and Antigravity quota refresh were not checked. The quota repair preserves separate network approvals and prevents concurrent reviews from invalidating one another. This is evidence for that deployment, not certification of arbitrary Hermes builds.
+
+Previously recorded isolated qualification:
 
 | Check | Evidence |
 | --- | --- |
@@ -242,6 +246,6 @@ Observed in the current isolated qualification:
 | Linux Desktop UI | Full generated OAuth/configuration flow, one docked workspace, native-page isolation, counted effects, same-document navigation, live pane switching and lock revocation passed. Two pinned host-owned catalog embeds were refused before networking; guest requests received no exemption. |
 | Agent-only Dashboard UI | HTTP, remapped HTTP, authenticated HTTPS and HTTPS without forwarded-protocol headers passed. HTTP also exercised generated OAuth, credential visibility, native API-key save and persistence after lock/reload. Every origin exercised native navigation containment, concurrent console work, slow-effect revocation and close during an unread 24 MiB response. |
 
-These are generated-data candidate checks, not one full upstream Hermes suite or packaged-release certification. No real subscription account, paid model call, external provider authorization or live credential migration was exercised. Live Hermes and the independent CPA pilot were not modified.
+The table records generated-data checks, not one full upstream Hermes suite or packaged-release certification. Real-account and live-cutover evidence is limited to the working snapshot described above. Credentials, profile configuration and runtime state are not release artifacts.
 
 Tracker: [integration map #1](https://github.com/baladithyab/hermes-cpa/issues/1), [host/package decision #2](https://github.com/baladithyab/hermes-cpa/issues/2), [registered-provider qualification #4](https://github.com/baladithyab/hermes-cpa/issues/4), [full CPAMC parity #5](https://github.com/baladithyab/hermes-cpa/issues/5).

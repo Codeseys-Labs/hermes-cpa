@@ -10,7 +10,8 @@ Unified agent plugin for native CLIProxyAPI (CPA) lifecycle supervision, a regis
 - Revision-checked configuration mutations, reviewed effects and operation reconciliation without mutation replay.
 - Separate, short-lived native resource grants tied to the reviewed plugin incarnation and presenting document.
 
-This is an isolated, unaccepted candidate, not a release or deployment approval.
+This private working snapshot is accepted for the documented patched Hermes
+integration, not for stock Hermes or a generally certified Desktop release.
 Rollback can fail or stop on drift/revocation; it never guarantees restoration.
 See [native recovery](RECOVERY.md) for observed doctor, lost-owner bootstrap and
 explicit snapshot recovery commands, supported boundaries and remaining gaps.
@@ -42,7 +43,8 @@ not; managed setup refuses an incomplete package. The scoped host patch runs
 native CLI argument parsing and handlers in the isolated plugin child, including
 normal help and foreground signal handling. Stock Hermes lacks this contract.
 See the [repository installation guide](../README.md) for the pinned host patch.
-Release acceptance and a minimum qualified Desktop version remain unset.
+The private snapshot accepts patched Hermes 0.21.6; a minimum generally supported
+Desktop version remains unset. The console requires `plugins.isolation: host`.
 
 ## Credentials and console authority
 
@@ -59,6 +61,11 @@ Locking, selection retirement and plugin-generation changes revoke the document.
 Desktop external links use the native opener; Dashboard links require a new user
 gesture on the trusted launcher prompt. File import and export are bounded at
 10 MiB and 32 MiB respectively.
+
+Conflicting management requests are queued through their terminal receipts before
+the next review is prepared. Quota refreshes can require separate approvals for
+usage, subscription and reset-credit reads. Known read-only management routes
+still overlap; arbitrary plugin handlers do not.
 
 Native plugin pages use a separate resource grant, not the console management
 channel. A grant authorizes an exact resource for the reviewed plugin incarnation;
@@ -77,7 +84,6 @@ The explicit standalone external broker separately uses that owner's
 [subscription broker](SUBSCRIPTION-BROKER.md).
 
 Existing configurations or legacy private CPA key entries are not silently
-migrated, rotated, reused or deleted by setup. This candidate requires a fresh,
-explicitly permitted isolated root for the private-channel transition. No live
-credential migration or real provider authorization is implied by generated
-qualification.
+migrated, rotated, reused or deleted by setup. Private-channel transitions need an
+explicit migration plan and credential backup. Generated qualification does not
+imply live credential migration or real provider authorization.
