@@ -45,15 +45,19 @@ def provider_runtime(control_path, home, base_url):
 
 def main():
     import argparse
-    from hermes_constants import get_hermes_home
     parser = argparse.ArgumentParser(description='Mint a revocable local inference grant, not an upstream key')
     parser.add_argument('--control', required=True)
     parser.add_argument('--home')
     parser.add_argument('--enrolled', action='store_true')
     args = parser.parse_args()
+    home = args.home
+    if home is None:
+        # Enrolled helpers always pin --home and run under a bare interpreter
+        # where Hermes itself is not importable.
+        from hermes_constants import get_hermes_home
+        home = get_hermes_home()
     try:
-        print(json.dumps({'access_token': grant_token(args.control, args.home or get_hermes_home(),
-                                                     enrolled=args.enrolled),
+        print(json.dumps({'access_token': grant_token(args.control, home, enrolled=args.enrolled),
                           'expires_in': 0}))
     except RuntimeError:
         parser.exit(1, 'Subscription broker unavailable; no credential fallback.\n')
