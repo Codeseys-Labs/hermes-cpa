@@ -6,8 +6,10 @@ selection lock; binding.scope is RequestScope and binding.controller is the
 lifecycle-owned facade. Nothing here derives identity from client paths/env.
 """
 import hashlib
+import atexit
 import json
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -34,6 +36,31 @@ async def lifespan(app):
     finally:
         for home in app.state.cpa_guard_homes:
             close_profile_guard(home)
+
+
+_guard_lock = threading.Lock()
+
+
+def _close_guards(homes):
+    from hermes_cpa.host_binding import close_profile_guard
+    for home in list(homes):
+        close_profile_guard(home)
+
+
+def guard_homes(request):
+    """Homes this app authenticated.
+
+    A hosted backend hot-mounts plugin routes after startup, so the router
+    lifespan never runs. Create the set on first use and close the same guards
+    at process exit, exactly as the lifespan would.
+    """
+    state = request.app.state
+    with _guard_lock:
+        homes = getattr(state, 'cpa_guard_homes', None)
+        if homes is None:
+            homes = state.cpa_guard_homes = set()
+            atexit.register(_close_guards, homes)
+        return homes
 
 
 router = APIRouter(lifespan=lifespan)
@@ -155,10 +182,7 @@ def dispatch_hosted_read(request, action, payload):
         return error('UNAVAILABLE', 503)
     scope_id, controller = binding
     if payload is not None:
-        homes = getattr(request.app.state, 'cpa_guard_homes', None)
-        if homes is None:
-            return error('UNAVAILABLE', 503)
-        homes.add(controller.settings.home)
+        guard_homes(request).add(controller.settings.home)
         from hermes_cpa.host_binding import submit_accepted
         data = submit_accepted(request, controller, action, payload)
         if data.get('ok') is False:
@@ -294,9 +318,7 @@ def console_dispatch(request, op, payload, deadline=None):
                     raise BoundaryError('READ_ONLY', 403)
                 if scope.policy_locked and op not in ('result', 'resource_close'):
                     raise BoundaryError('POLICY_LOCKED', 403)
-                homes = getattr(request.app.state, 'cpa_guard_homes', None)
-                if homes is not None:
-                    homes.add(controller.settings.home)
+                guard_homes(request).add(controller.settings.home)
                 data = console_call(request, controller, op, payload, binding)
                 binding.assert_current()
                 scope_id = scope.scope_id
@@ -305,10 +327,7 @@ def console_dispatch(request, op, payload, deadline=None):
             if found is None:
                 raise BoundaryError('UNAUTHORIZED', 401)
             scope_id, controller = found
-            homes = getattr(request.app.state, 'cpa_guard_homes', None)
-            if homes is None:
-                raise BoundaryError('UNAVAILABLE', 503)
-            homes.add(controller.settings.home)
+            guard_homes(request).add(controller.settings.home)
             data = console_call(request, controller, op, payload)
         if data.get('ok') is False:
             return error(data.get('code'), 409, data if op == 'resource' else None)

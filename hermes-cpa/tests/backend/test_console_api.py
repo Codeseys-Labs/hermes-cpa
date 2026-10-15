@@ -450,6 +450,31 @@ def test_hosted_console_dispatch_selects_outer_budget_and_keeps_entry_deadline(c
     assert json.loads(result.body)['error']['effect_invoked'] is True
 
 
+def test_hot_mounted_routes_track_guards_without_router_lifespan(client, monkeypatch):
+    # A hosted backend mounts plugin routes after startup, so the router lifespan
+    # never creates cpa_guard_homes; the first console call must not fail on it.
+    from hermes_cpa import host_binding
+    http, host, _, _, _, document = client
+    controller = host.controller
+    controller.timeout, controller.request_deadline, controller.adapter = 35., None, None
+    registered = []
+    monkeypatch.setattr(api.atexit, 'register', lambda fn, *args: registered.append((fn, args)))
+    monkeypatch.setattr(host_binding, 'controller_from_profile', lambda settings, scope: controller)
+    controller.console = lambda op, args: {
+        'ok': False, 'code': 'OUTCOME_UNKNOWN', 'effect_invoked': True, 'response_withheld': False}
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        state=SimpleNamespace(hermes_context={
+            'version': 1, 'principal': host.principal, 'home': str(controller.settings.home),
+            'host_incarnation': controller.scope.connection_id}, hermes_operations=host.operations))
+    result = api.console_dispatch(request, 'resource', {'document_id': document})
+    assert result.status_code == 409
+    homes = request.app.state.cpa_guard_homes
+    assert homes == {controller.settings.home}
+    assert api.guard_homes(request) is homes
+    assert len(registered) == 1 and registered[0] == (api._close_guards, (homes,))
+
+
 def test_console_entry_deadline_includes_body_read_and_threadpool_handoff(monkeypatch):
     from starlette.datastructures import QueryParams
     import starlette.concurrency
