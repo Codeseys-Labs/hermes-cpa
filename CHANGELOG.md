@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Corrected runtime release CI to request `blacksmith-4vcpu-ubuntu-2404` explicitly. Installing the Blacksmith app does not redirect `ubuntu-latest` jobs; manual dispatch remains build-and-verify only.
+
 ## preview-2026-10-16
 
 - Prepared the Codeseys-Labs public preview, migrated the pinned runtime acquisition source and installation/tracker links, and retained the patched-host compatibility gates. This is not a standalone Windows installer.
