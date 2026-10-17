@@ -762,7 +762,8 @@ export function createTrustedLauncherSession({
     async unlock(expectedGeneration) {
       if (closed || unlocked || !Number.isInteger(expectedGeneration) || expectedGeneration < 1) throw new LauncherError('UNAVAILABLE');
       const result = await call('/console/unlock', {
-        request_id: uuid(), expected_generation: expectedGeneration, document_id: documentId, consent: true,
+        request_id: uuid(), expected_generation: expectedGeneration, document_id: documentId,
+        consent: true, quota_reads: true,
       });
       if (!record(result) || result.ok !== true || result.document_id !== documentId ||
           !Number.isInteger(result.generation) || result.generation < 1 ||

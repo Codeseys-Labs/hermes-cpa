@@ -67,15 +67,19 @@ the next review is prepared. Known read-only management routes still overlap;
 arbitrary plugin handlers do not. Pending receipts use short, growing poll waits,
 without resubmitting accepted operations.
 
-The first matching Codex, Claude or Antigravity quota/profile read asks for one
-account-scoped approval until Lock or session expiry. Matching follow-up reads
-keep their own owner reviews, host grants and receipts but need no further modal.
-The owner verifies the credential against native inventory and accepts only fixed
-methods, URLs, headers, queries and bodies. Redirects are refused. Unknown request
-shapes, other credentials, arbitrary network calls, inference, resets, credit
-consumption, credential changes and plugin actions retain their ordinary prompts.
-Managed credential changes and changed account identity invalidate remembered
-approval. Normal token refresh for the same account does not expand its scope.
+The explicit Unlock dialog includes fixed Codex, Claude and Antigravity
+quota/profile reads for up to 32 currently verified accounts in the captured
+profile until Lock or expiry. These reads keep their own owner reviews, host
+grants and receipts but need no additional approval modal. Inventory is sampled
+at unlock, and that permission is bound into the host's accepted unlock intent.
+The owner still verifies credential identity and exact methods, URLs, headers,
+queries and bodies for every request. Redirects are refused.
+
+Unknown request shapes, newly added or replaced credentials, arbitrary network
+calls, inference, resets, credit consumption, credential changes and plugin
+actions retain their ordinary prompts. Managed credential changes invalidate
+remembered approval. Normal token refresh for the same account does not expand
+its scope.
 
 ### Session approval security
 
@@ -87,7 +91,7 @@ selection retirement and policy/generation changes revoke its authority.
 ```mermaid
 flowchart LR
     Guest[CPAMC document] -. Request .-> Host[Trusted launcher]
-    Host -->|First scoped approval and every review| Owner[Owner lease]
+    Host -->|Explicit unlock consent and every review| Owner[Owner lease]
     Owner -->|Private control and fixed egress policy| CPA[Owned CPA]
     CPA -->|Trusted credential metadata| Owner
     CPA -. HTTPS, no redirects .-> Provider[Fixed provider endpoint]
@@ -96,7 +100,7 @@ flowchart LR
 | Component | Threat | Control | Status |
 | --- | --- | --- | --- |
 | CPAMC document | Spoofed quota request inherits network consent | Owner matches fixed templates and verifies credential/provider/account identity | Mitigated |
-| Trusted launcher | A one-request prompt conceals broader consent | The first prompt explicitly names the account and permission lifetime | Mitigated |
+| Trusted launcher | Unlock silently broadens network authority | The unlock dialog explicitly names fixed quota/profile reads, existing accounts and lifetime; its permission is bound to the host grant | Mitigated |
 | Owner lease | A prepared no-modal review survives credential replacement | Credential version is checked during preparation, acceptance and dispatch; grants retain that version | Mitigated |
 | CPA egress | A redirect discloses a substituted credential | Fixed HTTPS destination and method; no redirects, Host overrides or explicit proxies | Mitigated |
 | Policy sampler | Cached YAML hides a disable or replacement | Identity/epoch checks still run before and after reuse; recent or future-dated stamps reparse | Mitigated |

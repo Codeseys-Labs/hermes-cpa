@@ -3,17 +3,17 @@
   "build": "Bun 1.4.0",
   "artifacts": {
     "desktop/plugin.js": {
-      "sha256": "0e2ce3570fe6fcc8c986b55cd96b4b59166ccf167b5268f4d04a2970fd7b2ca6",
-      "size_bytes": 29034
+      "sha256": "c8015a9a69a97979646d0bc820dacea528e5828264f2e426f80e26c17b5098b5",
+      "size_bytes": 29280
     },
     "dashboard/index.js": {
-      "sha256": "d5e714c9bb40aed731bebd91cdecc27b1964f76e296e79eda4bd73a947ffaf47",
-      "size_bytes": 27821
+      "sha256": "a1fc2b2422057bd67bf78db93aa4edb14fa26343e7c23ebf911b89913795d2bf",
+      "size_bytes": 28067
     }
   },
   "source_hashes": {
-    "console/launcher-bridge.js": "02082b4c55d574d4823b5356c4b0f883aa9afce07dd44d697f23a9fdc23f0797",
-    "console/launcher-view.js": "08c742de9e56e97fd5a58f81fbcda94fa0fbc038a1675359c04255edea16dc6c",
+    "console/launcher-bridge.js": "48e334068fcc8a10a8ffa2bef685aff2b024eaf06f2592fdb72b68c23e0f91bf",
+    "console/launcher-view.js": "25fd78bcf786ad1860fa9973bf0b4f75db674756926c4aa13247519a7bfc1fb1",
     "desktop/src/launcher.js": "651b3f838ec596223e2f729085ac05fe8b434501a7507890d4b01de5a3bed710",
     "dashboard/src/launcher.js": "ad87554de4f56a11300c4fe4ff479f6d0d0e946d14ba9cca188f3dd8fd247fdf"
   }

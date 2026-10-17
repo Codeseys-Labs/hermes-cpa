@@ -301,6 +301,27 @@ def verify(candidate, files):
                      _summary(template, name))
 
 
+def inventory_scopes(files):
+    """Current credential identities eligible for consent at trusted unlock."""
+    scopes = {}
+    for entry in files:
+        if not isinstance(entry, dict) or not _identifier(entry.get('auth_index')):
+            continue
+        provider = str(entry.get('provider', entry.get('type', ''))).strip().lower()
+        template = next((item for item in TEMPLATES if item.provider == provider and
+                         item.body != 'project'), None)
+        if template is None:
+            continue
+        account = _codex_account(entry) if provider == 'codex' else None
+        candidate = Candidate(template, entry['auth_index'], None, account, None)
+        verified = verify(candidate, files)
+        if verified is not None:
+            scopes[verified.key] = verified.identity
+            if len(scopes) == MAX_GRANTS_PER_LEASE:
+                break
+    return scopes
+
+
 def _summary(template, name):
     provider = DISPLAY[template.provider]
     label = ''.join(c for c in name if c.isprintable())[:96]

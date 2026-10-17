@@ -346,7 +346,7 @@ export function createCpaLauncher({
         open: true,
         title: dialog.kind === 'unlock' ? 'Unlock CPA management?' : 'Review CPA effect',
         description: dialog.kind === 'unlock'
-          ? 'This opens a time-limited management session for the captured Hermes profile.'
+          ? 'Open a time-limited credential-management session for this Hermes profile and allow fixed Codex, Claude and Antigravity quota/profile reads for its currently verified accounts until Lock or expiry. Other network calls, credential changes, resets, credit consumption and plugin actions still require approval.'
           : dialog.summary,
         confirmLabel: dialog.kind === 'unlock' ? 'Unlock console' : 'Approve exact effects',
         onClose: () => dialog.kind === 'unlock'

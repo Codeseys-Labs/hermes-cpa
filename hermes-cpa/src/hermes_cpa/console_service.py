@@ -48,9 +48,11 @@ def _quota_plugin(request):
 
 
 def unlock_intent(args):
+    quota_reads = args.get('quota_reads', False)
+    require(type(quota_reads) is bool)
     return {'action': 'console.unlock', 'request_id': args['request_id'],
             'expected_generation': args['expected_generation'], 'consent': True,
-            '_scope': args['_scope']}
+            'quota_reads': quota_reads, '_scope': args['_scope']}
 
 
 def execute_intent(args, generation):
@@ -226,7 +228,21 @@ class OwnerConsoleService:
         policy = getattr(self.owner, 'policy', None)
         captured = policy.capture() if hasattr(policy, 'capture') else None
         require(not hasattr(policy, 'capture') or captured is not None, 'POLICY_LOCKED')
+        quota_grants = {}
+        if intent['quota_reads']:
+            with self._gate:
+                quota_version = self._versions.get('credentials', 0)
+                require('credentials' not in self._active, 'REVIEW_STALE')
+            identities = console_quota.inventory_scopes(self._credential_inventory())
+            quota_grants = {key: (identity, quota_version) for key, identity in identities.items()}
+            self._policy()
+            if grant:
+                require(revalidate_grant(grant, intent, timeout=self._timeout(1.)), 'STALE_SCOPE')
         with self._gate:
+            require(args['expected_generation'] == self.owner.generation, 'STALE_GENERATION')
+            if intent['quota_reads']:
+                require(quota_version == self._versions.get('credentials', 0) and
+                        'credentials' not in self._active, 'REVIEW_STALE')
             for key, lease in self._leases.items():
                 if lease['intent']['request_id'] == intent['request_id']:
                     require(lease['intent'] == intent and not lease['revoked'] and
@@ -243,7 +259,7 @@ class OwnerConsoleService:
             lease = {'scope': dict(args['_scope']), 'generation': self.owner.generation,
                      'expires': time.monotonic() + LEASE_SECONDS, 'expires_at': time.time() + LEASE_SECONDS,
                      'revoked': False, 'policy': captured, 'intent': intent, 'grant': grant,
-                     'quota_grants': {}}
+                     'quota_grants': quota_grants}
             self._leases[lease_id] = lease
             return self._lease_response(lease_id, lease)
 
@@ -513,17 +529,21 @@ class OwnerConsoleService:
             summary += '\nEffects: ' + ', '.join(sorted(effects))
         return summary
 
+    def _credential_inventory(self):
+        response = self.transport.request('GET', PREFIX + '/credentials', timeout=self._timeout(2.),
+                                          max_response=RESULT_LIMIT)
+        require(response.status == 200, 'UNAVAILABLE')
+        value = json.loads(response.body)
+        require(isinstance(value, dict) and isinstance(value.get('files'), list), 'UNAVAILABLE')
+        return value['files']
+
     def _quota_read(self, request):
         """Trusted-inventory proof that a fixed quota template belongs to its credential, or None."""
         candidate = console_quota.match(request)
         if candidate is None:
             return None
         try:
-            response = self.transport.request('GET', PREFIX + '/credentials', timeout=self._timeout(2.),
-                                              max_response=RESULT_LIMIT)
-            if response.status != 200:
-                return None
-            return console_quota.verify(candidate, json.loads(response.body).get('files'))
+            return console_quota.verify(candidate, self._credential_inventory())
         except Exception:
             return None
 

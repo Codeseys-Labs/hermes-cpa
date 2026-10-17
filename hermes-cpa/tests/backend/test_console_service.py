@@ -1657,11 +1657,12 @@ def run(console, wire, request_id):
     return review
 
 
-def reopen(console, suffix):
+def reopen(console, suffix, *, quota_reads=False):
     service, owner, _, args = console
     scope = dict(args['_scope'], document_id=str(uuid.uuid4()))
     unlocked = service.dispatch('unlock', {'_scope': scope, 'document_id': scope['document_id'],
-        'request_id': 'unlock-' + suffix, 'expected_generation': owner.generation, 'consent': True})
+        'request_id': 'unlock-' + suffix, 'expected_generation': owner.generation, 'consent': True,
+        'quota_reads': quota_reads})
     assert unlocked['ok']
     return console[:3] + (dict(args, _scope=scope, document_id=scope['document_id'], lease_id=unlocked['lease_id']),)
 
@@ -2016,3 +2017,83 @@ def test_acceptance_never_installs_a_grant_under_a_newer_credentials_version(con
     assert prepare(console, codex_credits(), 'after')['requires_confirmation'] is True
     run(console, codex_usage(), 'second')
     assert prepare(console, codex_credits(), 'covered')['requires_confirmation'] is False
+
+
+def test_unlock_quota_consent_covers_only_existing_verified_accounts(console):
+    _, _, native, _ = console
+    inventory(native, codex_credential(), credential('claude', 'claude-index'),
+              credential('antigravity', 'agy-index', project_id=PROJECT))
+    scoped = reopen(console, 'quota-consent', quota_reads=True)
+    for number, wire in enumerate((codex_usage(), codex_subscription(), codex_credits(),
+                                   claude_call('/api/oauth/usage'), agy_subscription(), agy_quota())):
+        assert run(scoped, wire, 'covered-' + str(number))['requires_confirmation'] is False
+    consume = api_call(CODEX_URL + '/wham/rate-limit-reset-credits/consume', CODEX_HEADER, method='POST')
+    assert prepare(scoped, consume, 'consume')['requires_confirmation'] is True
+    assert prepare(scoped, api_call('https://unapproved.example/usage', CODEX_HEADER),
+                   'other-destination')['requires_confirmation'] is True
+
+
+@pytest.mark.parametrize('change', ['added', 'replaced'])
+def test_unlock_quota_consent_does_not_authorize_new_or_replaced_accounts(console, change):
+    _, _, native, _ = console
+    inventory(native, codex_credential())
+    scoped = reopen(console, 'current-accounts', quota_reads=True)
+    if change == 'added':
+        inventory(native, codex_credential(), codex_credential('new-index'))
+        wire = codex_usage('new-index')
+    else:
+        inventory(native, codex_credential(email='replacement@generated.example'))
+        wire = codex_usage()
+    assert prepare(scoped, wire, 'changed-account')['requires_confirmation'] is True
+
+
+def test_unlock_quota_permission_is_bound_to_the_host_grant(console):
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from hermes_cpa.console_service import unlock_intent
+    from hermes_cpa.operation_guard import OperationGuardServer
+
+    service, owner, native, args = console
+    payload = {'_scope': args['_scope'], 'document_id': args['document_id'],
+               'request_id': 'quota-authority', 'expected_generation': owner.generation,
+               'consent': True, 'quota_reads': False}
+    with TemporaryDirectory(prefix='cpa-quota-') as directory:
+        server = OperationGuardServer(Path(directory))
+        try:
+            grant = server.grant(unlock_intent(payload), lambda **kwargs: True)
+            result = service.dispatch('unlock', dict(payload, quota_reads=True, _host_grant=grant))
+            assert result['code'] == 'STALE_SCOPE'
+            assert not any(call[1] == INVENTORY for call in native.calls)
+        finally:
+            server.close()
+
+
+@pytest.mark.parametrize('change', ['credentials', 'generation'])
+def test_unlock_rejects_inventory_changed_during_quota_consent(console, monkeypatch, change):
+    service, owner, native, args = console
+    inventory(native, codex_credential())
+    original = native.request
+
+    def changed(method, path, **kwargs):
+        response = original(method, path, **kwargs)
+        if path == INVENTORY:
+            if change == 'credentials':
+                bump_credentials(service)
+            else:
+                owner.generation += 1
+        return response
+
+    monkeypatch.setattr(native, 'request', changed)
+    count = len(service._leases)
+    result = service.dispatch('unlock', dict(args, request_id='raced-unlock',
+        expected_generation=owner.generation, consent=True, quota_reads=True))
+    assert result['code'] == ('REVIEW_STALE' if change == 'credentials' else 'STALE_GENERATION')
+    assert len(service._leases) == count
+
+
+def test_unlock_quota_consent_fails_closed_when_inventory_is_unavailable(console):
+    service, owner, native, args = console
+    native.responses['GET', INVENTORY] = SimpleNamespace(status=503, headers={}, body=b'{}')
+    result = service.dispatch('unlock', dict(args, request_id='unavailable-inventory',
+        expected_generation=owner.generation, consent=True, quota_reads=True))
+    assert result['code'] == 'UNAVAILABLE'
