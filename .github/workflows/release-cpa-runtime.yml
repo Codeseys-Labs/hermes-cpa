@@ -1,0 +1,88 @@
+name: Release CPA runtime
+
+# Reproducible runtime release. A tag push publishes only when the pushed tag
+# equals the candidate pin in hermes-cpa/cpa-runtime.json (which runtime_manifest.py
+# also enforces in code). A manual dispatch builds and verifies the pinned
+# runtime without publishing anything.
+
+on:
+  push:
+    tags: ['cpa-runtime-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Routed to Blacksmith runners by the org's blacksmith-sh GitHub App;
+    # falls back to GitHub-hosted runners unchanged.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve and guard the release tag
+        run: |
+          pinned="$(jq -er '.candidate.tag' hermes-cpa/cpa-runtime.json)"
+          if [ "${GITHUB_EVENT_NAME}" = push ]; then
+            if [ "${GITHUB_REF_NAME}" != "${pinned}" ]; then
+              echo "::error::pushed tag ${GITHUB_REF_NAME} does not match the pinned candidate tag ${pinned}. Bump runtime_manifest.py and hermes-cpa/cpa-runtime.json first." >&2
+              exit 1
+            fi
+            tag="${GITHUB_REF_NAME}"
+          else
+            # Manual dispatch always verifies the pinned build and never publishes.
+            tag="${pinned}"
+          fi
+          echo "RELEASE_TAG=${tag}" >> "$GITHUB_ENV"
+          echo "ASSET=$(jq -er '.candidate.asset' hermes-cpa/cpa-runtime.json)" >> "$GITHUB_ENV"
+
+      - name: Build the runtime and run the Go gates
+        run: |
+          docker buildx build -f qualification/Dockerfile.runtime \
+            --target artifact --output "type=local,dest=$(pwd)/dist" .
+
+      - name: Verify the rebuilt archive against the pinned digest
+        run: |
+          expected="$(jq -er '.artifact.archive_sha256' hermes-cpa/cpa-runtime.json)"
+          actual="$(sha256sum "dist/${ASSET}" | cut -d' ' -f1)"
+          echo "Archive SHA-256: ${actual}"
+          [ "${actual}" = "${expected}" ] || {
+            echo "::error::rebuilt archive ${actual} does not match the pinned digest ${expected}" >&2
+            exit 1
+          }
+          (cd dist && sha256sum "${ASSET}" > SHA256SUMS && cat SHA256SUMS)
+
+      - name: Publish the release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          body="$(mktemp)"
+          {
+            echo "Reproducible Hermes CPA runtime built by CI from the pinned upstream base commit."
+            echo
+            echo "- Integration: $(jq -r '.integration' hermes-cpa/cpa-runtime.json) — CPA $(jq -r '.cpa_version' hermes-cpa/cpa-runtime.json), $(jq -r '.platform' hermes-cpa/cpa-runtime.json)"
+            echo "- Upstream base: $(jq -r '.source.upstream_repository' hermes-cpa/cpa-runtime.json) @ $(jq -r '.source.base_commit' hermes-cpa/cpa-runtime.json)"
+            echo "- Integration patch: sha256 $(jq -r '.source.patch_sha256' hermes-cpa/cpa-runtime.json)"
+            echo "- Toolchain: $(jq -r '.build.go_version' hermes-cpa/cpa-runtime.json), $(jq -r '.build.gcc_version' hermes-cpa/cpa-runtime.json), $(jq -r '.build.libc_version' hermes-cpa/cpa-runtime.json) (max GLIBC $(jq -r '.build.glibc_max' hermes-cpa/cpa-runtime.json))"
+            echo "- Archive SHA-256: $(jq -r '.artifact.archive_sha256' hermes-cpa/cpa-runtime.json)"
+            echo "- The archive bundles complete third-party license notices."
+            echo
+            echo "The build re-verified the archive and binary digests against hermes-cpa/compatibility.json and hermes-cpa/cpa-runtime.json, and ran go vet plus the owner/API/plugin-host/store/server suites before this release was published."
+          } > "${body}"
+          args=(--title "${RELEASE_TAG}" --notes-file "${body}")
+          case "${RELEASE_TAG}" in
+            *candidate*|*snapshot*) args+=(--prerelease) ;;
+          esac
+          if gh release view "${RELEASE_TAG}" -R "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${RELEASE_TAG} already exists; uploading verified assets."
+            gh release upload "${RELEASE_TAG}" "dist/${ASSET}" dist/SHA256SUMS --clobber -R "${GITHUB_REPOSITORY}"
+          else
+            gh release create "${RELEASE_TAG}" "${args[@]}" "dist/${ASSET}" dist/SHA256SUMS -R "${GITHUB_REPOSITORY}"
+          fi
