@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { viteSingleFile } from 'vite-plugin-singlefile';
 import path from 'path';
@@ -35,13 +35,37 @@ function getVersion(): string {
   return 'dev';
 }
 
+// vite-plugin-singlefile inlines the JS/CSS chunks and, by default, deletes them from the bundle
+// before Vite's license plugin (build.license) runs, which would leave the dependency license
+// inventory empty. Keep the chunks in the bundle, then remove the written files so dist/ holds
+// only index.html and the inventory that scripts/build_console.py publishes as notices.
+function pruneInlinedFiles(): Plugin {
+  return {
+    name: 'hermes:prune-inlined-files',
+    enforce: 'post',
+    writeBundle(options, bundle) {
+      const { dir } = options;
+      if (!dir) {
+        throw new Error('Single-file output requires an output directory');
+      }
+      for (const fileName of Object.keys(bundle)) {
+        if (/\.(?:[mc]?js|css)$/.test(fileName)) {
+          fs.rmSync(path.join(dir, fileName));
+        }
+      }
+    }
+  };
+}
+
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
     react(),
     viteSingleFile({
-      removeViteModuleLoader: true
-    })
+      removeViteModuleLoader: true,
+      deleteInlinedFiles: false
+    }),
+    pruneInlinedFiles()
   ],
   define: {
     __APP_VERSION__: JSON.stringify(getVersion())
@@ -66,6 +90,7 @@ export default defineConfig({
     target: 'es2020',
     outDir: 'dist',
     assetsInlineLimit: 100000000,
+    license: { fileName: '.vite/license.json' },
     chunkSizeWarningLimit: 100000000,
     cssCodeSplit: false,
     rolldownOptions: {

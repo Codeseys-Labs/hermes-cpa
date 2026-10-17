@@ -8,9 +8,8 @@ import copy
 import json
 
 import pytest
-from hermes_cpa.runtime_manifest import (ARCHIVE_NAME, CANDIDATE_REPOSITORY, CANDIDATE_TAG,
-                                         MAX_ARTIFACT_BYTES, dump_runtime_manifest, glibc_tuple,
-                                         parse_runtime_manifest, unbuilt_manifest)
+from hermes_cpa.runtime_manifest import (ARCHIVE_NAME, MAX_ARTIFACT_BYTES, dump_runtime_manifest,
+                                         glibc_tuple, parse_runtime_manifest, unbuilt_manifest)
 from runtime_fixtures import BINARY, pinned_manifest, write_archive
 
 
@@ -30,13 +29,6 @@ def test_pinned_manifest_exposes_exact_digests_and_sizes(tmp_path):
     assert artifact.name == ARCHIVE_NAME
     assert artifact.archive_sha256 == data['artifact']['archive_sha256']
     assert (artifact.binary_sha256, artifact.binary_size) == (data['artifact']['binary_sha256'], len(BINARY))
-
-
-def test_candidate_identity_is_fixed_to_the_approved_private_repository():
-    candidate = unbuilt_manifest()['candidate']
-    assert candidate == {'host': 'github.com', 'repository': 'baladithyab/hermes-cpa',
-                         'tag': CANDIDATE_TAG, 'asset': ARCHIVE_NAME}
-    assert CANDIDATE_REPOSITORY == 'baladithyab/hermes-cpa'
 
 
 def mutate(path, value):

@@ -1,11 +1,11 @@
-"""Private candidate acquisition through gh: fixed source, pinned bytes, no side effects.
+"""Pinned candidate acquisition through gh: fixed source, pinned bytes, no side effects.
 
 A generated stand-in `gh` is the only executable on PATH; nothing reaches the network.
 """
 import pytest
 from hermes_cpa.candidate_download import AcquisitionError
 from hermes_cpa.installer import CpaInstaller
-from hermes_cpa.runtime_manifest import ARCHIVE_NAME, CANDIDATE_TAG
+from hermes_cpa.runtime_manifest import ARCHIVE_NAME, CANDIDATE_REPOSITORY, CANDIDATE_TAG
 from hermes_cpa.settings import CpaSettings
 from runtime_fixtures import BINARY, install_fake_gh, make_package, write_archive
 
@@ -31,7 +31,7 @@ def test_download_requests_only_the_fixed_candidate_and_returns_pinned_bytes(pin
     status, download = calls()
     assert status['argv'] == ['auth', 'status', '--hostname', 'github.com']
     assert download['argv'] == ['release', 'download', CANDIDATE_TAG, '--repo',
-                                'github.com/baladithyab/hermes-cpa', '--pattern', ARCHIVE_NAME,
+                                f'github.com/{CANDIDATE_REPOSITORY}', '--pattern', ARCHIVE_NAME,
                                 '--output', '-']
     for call in (status, download):
         assert call['env'] == {'GH_HOST': 'github.com', 'GH_REPO': None, 'GH_PROMPT_DISABLED': '1'}

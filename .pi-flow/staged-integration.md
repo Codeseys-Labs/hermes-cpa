@@ -1,6 +1,6 @@
 # Staged integration execution contract
 
-The user selected staged integration with a private GitHub tracker and authorized implementation and private publication. The Wayfinder map is https://github.com/baladithyab/hermes-cpa/issues/1. The host/package/ownership decision is https://github.com/baladithyab/hermes-cpa/issues/2. The user now explicitly prioritizes full CPAMC configuration, API-key and OAuth/credential parity through the agent-owned instance and optional Desktop UI; https://github.com/baladithyab/hermes-cpa/issues/5 owns that contract. This supersedes the earlier mutation implementation deferral, not the restrictions on real accounts, credentials, live deployments or external provider authorization.
+The user initially selected staged integration with a private GitHub tracker. The owner now authorizes a preview release, transfer to Codeseys-Labs and public repository visibility. The Wayfinder map is https://github.com/Codeseys-Labs/hermes-cpa/issues/1. The host/package/ownership decision is https://github.com/Codeseys-Labs/hermes-cpa/issues/2. Full CPAMC configuration, API-key and OAuth/credential parity through the agent-owned instance and optional Desktop UI remains owned by https://github.com/Codeseys-Labs/hermes-cpa/issues/5. Public source publication does not authorize sharing real accounts, credentials, live deployment state or external provider access.
 
 ## Source ownership
 
@@ -8,7 +8,7 @@ New Git checkout: `/home/codeseys/.hermes/projects/hermes-cpa`.
 
 `hermes-cpa/` is the unified agent/optional desktop package. `upstream-console/` contains the pinned upstream source and Hermes build. `host-integration/` records explicit compatibility changes against Hermes commit `0ed432d1871a9a9b169f5a778f6f9444fc13e0c1`; it must not silently install or patch the live runtime.
 
-Preserve original `/home/codeseys/.hermes/projects/hermes-cpa-fidelity-r1` snapshots. Do not edit their canonical or separate repairs. Do not touch installed Hermes, live homes/config/credentials, systemd services, or the independent CPA pilot. GitHub repository visibility remains private. No commits, push, live install, external OAuth, or new spend by workers.
+Preserve original `/home/codeseys/.hermes/projects/hermes-cpa-fidelity-r1` snapshots. Do not edit their canonical or separate repairs. Do not touch installed Hermes, live homes/config/credentials, systemd services, or the independent CPA pilot. Organization transfer and public preview publication are owner-authorized; workers still must not commit, push, install live, perform external OAuth or incur new spend.
 
 ## Required behavior
 
@@ -36,4 +36,4 @@ The full pinned CPAMC port passed generated-data qualification in native Windows
 
 The maintained isolated `hermes-cpa-dev` stack uses `/work/q-parity`, retaining all of `/work/q` and its generated Hermes token. Image/root selection is in the ignored `.verification/maintained-compose.env`; no credential is stored there. Managed health passed after the transition. The explicit permit expires at 2026-10-14T18:37:14Z; expiry is intentional, not an instruction to renew automatically.
 
-Private source/runtime publication remains subject to the parent's exact commit-message and candidate-publication approval. Source qualification does not change the Proposed ADR, unset minimum supported Desktop version, or unaccepted product-release metadata.
+The owner authorizes the next preview's source/runtime publication and organization transfer. The parent still needs exact commit-message approval before committing. Source qualification does not establish a minimum supported Desktop version or certify stock Hermes or a packaged Windows release; keep compatibility gates and earlier qualification limitations intact.

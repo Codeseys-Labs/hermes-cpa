@@ -36,8 +36,8 @@ GO_TOOLCHAIN_SHA256 = '42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef
 
 # The only remote the installer may contact, through an authenticated gh CLI.
 CANDIDATE_HOST = 'github.com'
-CANDIDATE_REPOSITORY = 'baladithyab/hermes-cpa'
-CANDIDATE_TAG = f'cpa-runtime-v{CPA_VERSION}-{INTEGRATION}-candidate1'
+CANDIDATE_REPOSITORY = 'Codeseys-Labs/hermes-cpa'
+CANDIDATE_TAG = f'cpa-runtime-v{CPA_VERSION}-{INTEGRATION}-candidate2'
 ARCHIVE_NAME = f'CLIProxyAPI_{CPA_VERSION}_{INTEGRATION}_{PLATFORM}.tar.gz'
 
 # Hard bound for the compressed archive and for the executable inside it.

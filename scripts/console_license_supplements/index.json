@@ -1,0 +1,32 @@
+{
+  "description": "License texts for npm packages bundled into the console whose published tarballs ship no license file. scripts/build_console.py publishes a text only for a package@version that the bundler reports without license text, only when the declared identifier matches, and fails when an entry is stale or its file digest differs.",
+  "supplements": [
+    {
+      "package": "@uiw/react-codemirror",
+      "version": "4.25.11",
+      "identifier": "MIT",
+      "file": "uiwjs-react-codemirror.LICENSE",
+      "sha256": "fd1f049b3bb5cbaf5143516b72dbc6805cd30cca0cda94edb37160e37662fd17",
+      "source": "https://github.com/uiwjs/react-codemirror/blob/990500ad9ae72400272c873df3ae061860ff00c2/LICENSE",
+      "note": "Repository LICENSE at the commit recorded as gitHead in the published package metadata."
+    },
+    {
+      "package": "@uiw/codemirror-extensions-basic-setup",
+      "version": "4.25.11",
+      "identifier": "MIT",
+      "file": "uiwjs-react-codemirror.LICENSE",
+      "sha256": "fd1f049b3bb5cbaf5143516b72dbc6805cd30cca0cda94edb37160e37662fd17",
+      "source": "https://github.com/uiwjs/react-codemirror/blob/990500ad9ae72400272c873df3ae061860ff00c2/LICENSE",
+      "note": "Published from the same repository and gitHead as @uiw/react-codemirror; the repository LICENSE at that commit covers it."
+    },
+    {
+      "package": "html-parse-stringify",
+      "version": "3.0.1",
+      "identifier": "MIT",
+      "file": "html-parse-stringify.LICENSE",
+      "sha256": "f51aa7a410f3d3ff9352a5422b76c072588ac76b63861f59447502caeacacc16",
+      "source": "https://github.com/HenrikJoreteg/html-parse-stringify/blob/a2659e6eac3603ba8b46958e0bd35b337108261f/LICENSE",
+      "note": "The v3.0.1 release commit and its npm tarball contain no license file (package.json and README declare MIT); this is the upstream repository LICENSE added afterwards in commit a2659e6, whose copyright line carries the later year."
+    }
+  ]
+}

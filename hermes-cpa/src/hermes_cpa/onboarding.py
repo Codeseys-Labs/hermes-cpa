@@ -71,12 +71,12 @@ def _acquisition_refusal(exc):
     code = str(exc)
     messages = {
         'gh_unavailable': 'The GitHub CLI (gh) was not found on PATH. Install gh and run '
-                          '`gh auth login` with an account that can read baladithyab/hermes-cpa. ',
+                          '`gh auth login` with an account that can read Codeseys-Labs/hermes-cpa. ',
         'gh_unauthenticated': 'gh could not confirm authentication for github.com (not logged in, '
                               'expired token or no network). Run `gh auth login` with an account '
-                              'that can read baladithyab/hermes-cpa. ',
-        'candidate_unavailable': 'The pinned private candidate runtime asset could not be downloaded '
-                                 'from baladithyab/hermes-cpa (not published yet, no read access for '
+                              'that can read Codeseys-Labs/hermes-cpa. ',
+        'candidate_unavailable': 'The pinned candidate runtime asset could not be downloaded '
+                                 'from Codeseys-Labs/hermes-cpa (not published yet, no read access for '
                                  'the gh account, or network failure). ',
         'candidate_mismatch': 'The downloaded candidate asset did not match the pinned size and '
                               'sha256 and was discarded. ',

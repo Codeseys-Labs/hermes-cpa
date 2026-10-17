@@ -8,9 +8,9 @@
     "upstream_tag": "v8.0.21",
     "base_commit": "54946fa3dfa29c6ca7312ac141a92cdd5e413771",
     "base_commit_date": "2026-10-08T12:04:31Z",
-    "patch_sha256": "4382892237ec0a87e0cc3d340f30b281022cf6b2187e77cf6220ef1580bc28e9",
-    "patch_size": 334205,
-    "changed_files": 45
+    "patch_sha256": "2f58b7e81cfcee4198e1652419cd362e9046358121e3bd5b3693c7ca695420d5",
+    "patch_size": 345177,
+    "changed_files": 48
   },
   "build": {
     "package": "./cmd/server",
@@ -26,15 +26,15 @@
   },
   "artifact": {
     "name": "CLIProxyAPI_8.0.21_hermes-owner-v1_linux_amd64.tar.gz",
-    "archive_sha256": "f573de3bea88f04365ab1ad6e889849c17ce52b54c418d9d058de258cd22ae5c",
-    "archive_size": 22937119,
-    "binary_sha256": "25d8a09391d2ba62b0b1de8f6d6171b7528c6c85b39a64610278c4bd97e0e0f0",
-    "binary_size": 69908448
+    "archive_sha256": "0ab75d12e8331e2c3fa6ca7733be7a7024065af6fd8b7f4ea23c01e9cfa12638",
+    "archive_size": 23110881,
+    "binary_sha256": "7c2c7fb52fad6d268b11c77c074a9ba3b1f7a8a5fbb73669e6b8f98cf39aa6d4",
+    "binary_size": 70292480
   },
   "candidate": {
     "host": "github.com",
-    "repository": "baladithyab/hermes-cpa",
-    "tag": "cpa-runtime-v8.0.21-hermes-owner-v1-candidate1",
+    "repository": "Codeseys-Labs/hermes-cpa",
+    "tag": "cpa-runtime-v8.0.21-hermes-owner-v1-candidate2",
     "asset": "CLIProxyAPI_8.0.21_hermes-owner-v1_linux_amd64.tar.gz"
   }
 }

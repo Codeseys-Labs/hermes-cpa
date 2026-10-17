@@ -24,7 +24,7 @@ ENV PATH=/opt/q/.verification/toolchains/go1.26.9/bin:$PATH \
 RUN git apply /opt/q/runtime-integration/patches/0001-hermes-owner-v1.patch \
     && go mod download
 RUN --network=none go vet -p=4 ./... \
-    && go test -p=4 ./internal/hermesowner/... ./internal/api/... ./internal/pluginhost/... ./cmd/server/...
+    && go test -p=4 ./internal/hermesowner/... ./internal/api/... ./internal/pluginhost/... ./internal/store/... ./cmd/server/...
 
 FROM scratch AS artifact
 COPY --from=gates /opt/q/dist/cpa-runtime/ /

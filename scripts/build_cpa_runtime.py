@@ -12,6 +12,15 @@ therefore dynamic against glibc and must run where gcc and libc headers exist, i
 the image that matches the runtime hosts. The binary's max GLIBC symbol version is
 recorded, and the installer refuses hosts with an older glibc.
 
+The archive keeps exactly two members, the executable and LICENSE. LICENSE is the
+unmodified upstream CLIProxyAPI LICENSE followed by the complete license, notice and
+patent-grant files of every Go module and of the Go standard library that is linked
+into the executable. The linked set comes from `go list -deps` for the exact build
+settings and must equal the module list the executable itself reports (`go version
+-m`); the texts are read from the verified module cache and the pinned GOROOT, so the
+same inputs always give the same bytes. A linked module with no license file fails the
+build rather than being listed without its text.
+
 The binary is built twice, with separate empty Go build caches, and must be
 byte-identical or the build fails. Without --check this then writes the artifact
 digests and provenance into hermes-cpa/cpa-runtime.json and the matching pair in
@@ -21,6 +30,7 @@ hermes-cpa/compatibility.json (release-acceptance fields are never touched). Wit
 import argparse
 import gzip
 import hashlib
+import io
 import json
 import os
 import re
@@ -40,6 +50,18 @@ DEFAULT_MODCACHE = ROOT / '.verification/go-mod-cache'
 PASSTHROUGH = ('HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy',
                'SSL_CERT_FILE', 'SSL_CERT_DIR', 'GOPROXY', 'GOSUMDB', 'GOPRIVATE', 'GOINSECURE')
 INTEGRATION_STRINGS = (b'hermes-owner-v1', b'hermes-control-socket')
+# Files that carry licence terms: LICENSE, LICENCE, COPYING, COPYRIGHT, NOTICE, UNLICENSE and
+# PATENTS, optionally followed by a separator and a suffix (LICENSE.md, LICENSE-MIT, COPYING.LESSER).
+LICENSE_NAME = re.compile(r'(?:LICEN[CS]E|COPYING|COPYRIGHT|NOTICE|UNLICENSE|PATENTS)(?:[._-][A-Za-z0-9._-]+)?',
+                          re.IGNORECASE)
+SOURCE_SUFFIXES = frozenset(('.go', '.s', '.c', '.cc', '.cpp', '.h', '.hpp', '.py', '.js', '.ts', '.json',
+                             '.yml', '.yaml', '.toml', '.sh', '.mod', '.sum', '.html', '.tmpl', '.tpl',
+                             '.proto', '.sql'))
+MAX_LICENSE_FILE = 1 << 20
+# The installer admits at most 4 MiB of non-executable members beside the executable.
+MAX_LICENSE_TEXT = 3 << 20
+RULE = b'=' * 80 + b'\n'
+THIN_RULE = b'-' * 80 + b'\n'
 
 
 def sha256_file(path):
@@ -170,34 +192,162 @@ def inspect_binary(rm, path):
     return '.'.join(map(str, max(versions)))
 
 
-def build_archive(destination, binary, license_file, epoch):
+def license_names(directory):
+    """License-bearing regular files directly inside DIRECTORY."""
+    with os.scandir(directory) as entries:
+        return sorted(entry.name for entry in entries
+                      if entry.is_file(follow_symlinks=False) and LICENSE_NAME.fullmatch(entry.name) and
+                      Path(entry.name).suffix.lower() not in SOURCE_SUFFIXES)
+
+
+def gather_license_files(root, directories):
+    """License files in each of DIRECTORIES and in every ancestor up to ROOT: {path relative to ROOT: path}."""
+    names, found = {}, {}
+    for directory in directories:
+        if directory != root and root not in directory.parents:
+            fail(f'{directory} is outside {root}')
+        current = directory
+        while True:
+            if current not in names:
+                names[current] = license_names(current)
+            for name in names[current]:
+                found[(current / name).relative_to(root).as_posix()] = current / name
+            if current == root:
+                break
+            current = current.parent
+    return found
+
+
+def read_license(path):
+    """The exact text of one license file; empty, oversized or non-UTF-8 files are refused."""
+    if not 0 < path.stat().st_size <= MAX_LICENSE_FILE:
+        fail(f'{path} is empty or larger than {MAX_LICENSE_FILE} bytes')
+    data = path.read_bytes()
+    try:
+        text = data.decode('utf-8')
+    except UnicodeDecodeError:
+        fail(f'{path} is not UTF-8 text')
+    if not text.strip() or '\0' in text:
+        fail(f'{path} has no license text')
+    return data if data.endswith(b'\n') else data + b'\n'
+
+
+def linked_packages(rm, go, tree, env):
+    """Every package `go list -deps` reports for the exact build settings (cgo, GOOS, GOARCH, tags)."""
+    listing = run([str(go), 'list', '-deps', '-json=ImportPath,Dir,Standard,Module', rm.BUILD_PACKAGE],
+                  cwd=tree, env=env)
+    decoder, position, packages = json.JSONDecoder(), 0, []
+    while True:
+        while position < len(listing) and listing[position].isspace():
+            position += 1
+        if position == len(listing):
+            return packages
+        package, position = decoder.raw_decode(listing, position)
+        packages.append(package)
+
+
+def reported_modules(go, binary, env):
+    """(path, version) of every module the executable's own build info lists as a dependency."""
+    modules = set()
+    for line in run([str(go), 'version', '-m', str(binary)], env=env).splitlines():
+        fields = line.split('\t')
+        if len(fields) >= 4 and fields[1] == 'dep':
+            modules.add((fields[2], fields[3]))
+    return modules
+
+
+def license_sections(rm, go, goroot, tree, env, binary):
+    """[(title, [(file, text)])] for the standard library, the main module's extra notices and each linked module."""
+    standard, main, modules = set(), set(), {}
+    for package in linked_packages(rm, go, tree, env):
+        name, module = package['ImportPath'], package.get('Module')
+        if not package.get('Dir'):
+            fail(f'go list reports no directory for linked package {name}; the module cache is incomplete')
+        directory = Path(package['Dir'])
+        if package.get('Standard'):
+            standard.add(directory)
+        elif not module:
+            fail(f'linked package {name} belongs to no Go module')
+        elif module.get('Main'):
+            main.add(directory)
+        else:
+            origin = module.get('Replace') or module
+            if not origin.get('Dir'):
+                fail(f'go list reports no directory for module {module["Path"]}; the module cache is incomplete')
+            entry = modules.setdefault((module['Path'], module.get('Version', '')),
+                                       {'root': Path(origin['Dir']), 'directories': set()})
+            entry['directories'].add(directory)
+    reported = reported_modules(go, binary, env)
+    if reported != set(modules):
+        fail('modules linked according to `go list` differ from the executable build info: '
+             f'{sorted(reported ^ set(modules))}')
+    sections = []
+    found = gather_license_files(goroot, standard | {goroot})
+    if 'LICENSE' not in found:
+        fail(f'{goroot}/LICENSE is missing; the standard library license cannot be bundled')
+    sections.append((f'Go standard library ({rm.GO_VERSION})', found))
+    extra = {name: path for name, path in gather_license_files(tree, main | {tree}).items() if name != 'LICENSE'}
+    if extra:
+        sections.append((f'{rm.GO_MODULE} {rm.CPA_VERSION} (additional notices)', extra))
+    for (path, version), entry in sorted(modules.items()):
+        found = gather_license_files(entry['root'], entry['directories'] | {entry['root']})
+        if not found:
+            fail(f'{path} {version} is linked into the executable but ships no license or notice file; '
+                 'its license text cannot be bundled')
+        sections.append((f'{path} {version}', found))
+    return [(title, [(name, read_license(path)) for name, path in sorted(files.items())])
+            for title, files in sections]
+
+
+def render_license(rm, original, sections):
+    """The archive LICENSE: the unmodified upstream license, then every bundled third-party text."""
+    out = [original if original.endswith(b'\n') else original + b'\n', b'\n', RULE,
+           b'THIRD-PARTY LICENSES AND NOTICES\n', RULE, b'\n',
+           (f'The cli-proxy-api executable in this archive is built from the CLIProxyAPI source covered by\n'
+            f'the license above, together with the Go standard library and the Go modules listed below.\n'
+            f'Each section reproduces, unmodified, every license, notice and patent-grant file that the\n'
+            f'toolchain ({rm.GO_VERSION}) or module distributes for the packages linked into the executable.\n'
+            f'\nContents:\n').encode()]
+    out.extend(f'  {title}\n'.encode() for title, _ in sections)
+    for title, files in sections:
+        for name, text in files:
+            out.extend((b'\n', THIN_RULE, f'{title}: {name}\n'.encode(), THIN_RULE, b'\n', text))
+    rendered = b''.join(out)
+    if len(rendered) > MAX_LICENSE_TEXT:
+        fail(f'the bundled license text is {len(rendered)} bytes; the installer admits at most {MAX_LICENSE_TEXT}')
+    return rendered
+
+
+def build_archive(destination, binary, license_text, epoch):
     """Deterministic tar.gz: fixed order, owners, modes, mtimes, no gzip name or time."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.name + '.tmp')
     try:
-        with open(temporary, 'wb') as raw:
+        with open(temporary, 'wb') as raw, open(binary, 'rb') as executable:
             with gzip.GzipFile(filename='', mode='wb', fileobj=raw, compresslevel=9, mtime=0) as packed:
                 with tarfile.open(fileobj=packed, mode='w', format=tarfile.USTAR_FORMAT) as bundle:
-                    for name, source, mode in (('cli-proxy-api', binary, 0o755),
-                                               ('LICENSE', license_file, 0o644)):
+                    for name, size, stream, mode in (
+                            ('cli-proxy-api', binary.stat().st_size, executable, 0o755),
+                            ('LICENSE', len(license_text), io.BytesIO(license_text), 0o644)):
                         info = tarfile.TarInfo(name)
-                        info.size, info.mode, info.mtime = source.stat().st_size, mode, epoch
+                        info.size, info.mode, info.mtime = size, mode, epoch
                         info.uid = info.gid = 0
                         info.uname = info.gname = ''
-                        with open(source, 'rb') as stream:
-                            bundle.addfile(info, stream)
+                        bundle.addfile(info, stream)
         os.replace(temporary, destination)
     finally:
         temporary.unlink(missing_ok=True)
 
 
-def verify_archive(rm, destination, binary_sha256):
+def verify_archive(rm, destination, binary_sha256, license_text):
     with tarfile.open(destination, 'r:gz') as bundle:
         names = bundle.getnames()
         if names != [rm.BINARY_NAME, 'LICENSE']:
             fail(f'unexpected archive members {names}')
         if hashlib.sha256(bundle.extractfile(rm.BINARY_NAME).read()).hexdigest() != binary_sha256:
             fail('archive executable does not match the built binary')
+        if bundle.extractfile('LICENSE').read() != license_text:
+            fail('archive LICENSE does not match the generated license text')
 
 
 def compatibility_with(rm, artifact):
@@ -263,15 +413,20 @@ def main():
             env = base_environment(work, work / f'gocache{attempt}', args.modcache.resolve(),
                                    args.offline, args.jobs)
             destination = work / f'cli-proxy-api.{attempt}'
-            go_build(rm, go, goroot, tree, env, destination, args.jobs)
+            build_env = go_build(rm, go, goroot, tree, env, destination, args.jobs)
             binaries.append(destination)
         first, second = (sha256_file(path) for path in binaries)
         if first != second:
             fail(f'build is not reproducible: {first} != {second}')
         glibc_max = inspect_binary(rm, binaries[0])
+        upstream_license = tree / 'LICENSE'
+        if not upstream_license.is_file():
+            fail('the pinned CPA source has no LICENSE file; the archive could not carry its attribution')
+        license_text = render_license(rm, read_license(upstream_license),
+                                      license_sections(rm, go, goroot, tree, build_env, binaries[0]))
         archive_path = args.output_dir.resolve() / rm.ARCHIVE_NAME
-        build_archive(archive_path, binaries[0], tree / 'LICENSE', epoch)
-        verify_archive(rm, archive_path, first)
+        build_archive(archive_path, binaries[0], license_text, epoch)
+        verify_archive(rm, archive_path, first, license_text)
         gcc = run(['gcc', '--version']).splitlines()[0].strip()
         libc = os.confstr('CS_GNU_LIBC_VERSION')
         artifact = {'name': rm.ARCHIVE_NAME, 'archive_sha256': sha256_file(archive_path),

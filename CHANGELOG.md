@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## preview-2026-10-16
+
+- Prepared the Codeseys-Labs public preview, migrated the pinned runtime acquisition source and installation/tracker links, and retained the patched-host compatibility gates. This is not a standalone Windows installer.
+- Hardened the pinned native dependency set and console lock, including Axios 1.20.0, React Router 7.18.2, go-git v6 alpha.5, x/net 0.60.0 and x/crypto 0.57.0. Preserved Git-store corruption detection by refreshing the updated storage cache before integrity checks; the existing corruption tests remain unchanged.
+- Restored complete bundled license notices for the console and native runtime, filled missing lockfile integrity values, and made console builds reject affected build-only glob packages in the emitted bundle. Documented the remaining unimported legacy OpenPGP and build-only `braces` advisory scope.
+- Made isolated-candidate authorization tests generate their own unaccepted package instead of depending on the shipped snapshot's acceptance state. Permit identity, expiry and captured-deadline checks remain covered without changing production authorization.
+- Configured the loopback WSL Desktop backend to load its supported session-token override from an owner-only environment file. The same Desktop process recovered across two backend restarts without manual reauthentication; missing/wrong credentials remained denied. No unauthenticated token-scraping fallback was added.
+- Moved fixed quota/profile-read consent into the explicit Unlock dialog for currently verified accounts. Removed the extra quota modal without granting arbitrary egress; added/replaced credentials still prompt. Live Antigravity plan and quota reads completed with zero extra approval dialogs.
 - Added once-per-unlocked-session approval for fixed Codex, Claude and Antigravity quota/profile reads, bound to trusted credential identity and managed credential versions. Arbitrary network calls, writes, credit consumption, resets and plugin effects still prompt. Explicit unlock and revocation remain.
 - Cached unchanged YAML policy projections while preserving identity/epoch revalidation, strict accepted-operation revocation and clock-rollback checks. Reduced pending-receipt poll waits without replaying operations.
 - Measured the live Windows-to-WSL console: unlock to frame decreased from 3.50 s to 1.32 s, Auth Files navigation from 3.70 s to 1.23 s, and median three-run credential refresh from 4.62 s to 1.31 s. These are local observations, not performance guarantees.

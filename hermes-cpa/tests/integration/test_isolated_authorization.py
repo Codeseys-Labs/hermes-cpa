@@ -13,6 +13,18 @@ from runtime_fixtures import make_package, write_archive
 PACKAGE = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture
+def candidate_package(tmp_path):
+    source = tmp_path / 'generated.tar.gz'
+    write_archive(source)
+    package = tmp_path / 'candidate-package'
+    manifest = make_package(package, source)
+    manifest.update(candidate_status='candidate', adr_status='Proposed',
+                    tested_minimum_hermes=None)
+    (package / 'compatibility.json').write_text(json.dumps(manifest))
+    return package
+
+
 def authorize(profile_home, path, package=PACKAGE, **changes):
     record = dict(version=1, purpose='isolated-candidate-test', home=str(profile_home.resolve()),
                   package_root=str(package.resolve()),
@@ -23,12 +35,12 @@ def authorize(profile_home, path, package=PACKAGE, **changes):
     path.chmod(0o600)
 
 
-def test_default_still_rejects_even_with_authorization_file(tmp_path):
+def test_default_still_rejects_even_with_authorization_file(tmp_path, candidate_package):
     home = tmp_path / 'home'
     home.mkdir()
     path = home / 'authorization.json'
-    authorize(home, path)
-    installer = CpaInstaller(CpaSettings(home), PACKAGE)
+    authorize(home, path, package=candidate_package)
+    installer = CpaInstaller(CpaSettings(home), candidate_package)
     with pytest.raises(ValueError, match='unaccepted_release'):
         installer._verify_content(b'not a binary')
 
@@ -36,26 +48,20 @@ def test_default_still_rejects_even_with_authorization_file(tmp_path):
 @pytest.mark.parametrize('change', [dict(expires_at=0), dict(home='/wrong-home'),
     dict(package_root='/wrong-package'), dict(manifest_sha256='0' * 64),
     dict(purpose='production'), dict(version=True)])
-def test_wrong_authorization_fails_closed(tmp_path, change):
+def test_wrong_authorization_fails_closed(tmp_path, candidate_package, change):
     home = tmp_path / 'home'
     home.mkdir()
     path = home / 'authorization.json'
-    authorize(home, path, **change)
-    installer = CpaInstaller(CpaSettings(home), PACKAGE, isolated_authorization=path)
+    authorize(home, path, package=candidate_package, **change)
+    installer = CpaInstaller(CpaSettings(home), candidate_package, isolated_authorization=path)
     with pytest.raises(ValueError, match='isolated_authorization'):
         installer._verify_content(b'not a binary')
 
 
-def test_explicit_authorization_does_not_skip_artifact_hashes(tmp_path):
+def test_explicit_authorization_does_not_skip_artifact_hashes(tmp_path, candidate_package):
     home = tmp_path / 'home'
     home.mkdir()
-    source = tmp_path / 'generated.tar.gz'
-    write_archive(source)
-    package = tmp_path / 'package'
-    manifest = make_package(package, source)
-    manifest.update(candidate_status='unaccepted; generated fixture', adr_status='Proposed',
-                    tested_minimum_hermes=None)
-    (package / 'compatibility.json').write_text(json.dumps(manifest))
+    package = candidate_package
     path = home / 'authorization.json'
     authorize(home, path, package=package)
     installer = CpaInstaller(CpaSettings(home), package, isolated_authorization=path)
@@ -90,34 +96,34 @@ def authorization_clock(monkeypatch):
     dict(package_root='/wrong-package'), dict(manifest_sha256='0' * 64),
     dict(purpose='production'), dict(version=True),
 ])
-def test_runtime_admission_rejects_invalid_permit(tmp_path, change):
+def test_runtime_admission_rejects_invalid_permit(tmp_path, candidate_package, change):
     home = tmp_path / 'home'
     home.mkdir()
     path = home / 'authorization.json'
-    authorize(home, path, **change)
-    installer = CpaInstaller(CpaSettings(home), PACKAGE, isolated_authorization=path)
+    authorize(home, path, package=candidate_package, **change)
+    installer = CpaInstaller(CpaSettings(home), candidate_package, isolated_authorization=path)
     with pytest.raises(ValueError, match='isolated_authorization'):
         installer.runtime_authorization()
 
 
-def test_runtime_admission_requires_explicit_candidate_permit(tmp_path):
+def test_runtime_admission_requires_explicit_candidate_permit(tmp_path, candidate_package):
     path = tmp_path / 'authorization.json'
-    authorize(tmp_path, path)
-    installer = CpaInstaller(CpaSettings(tmp_path), PACKAGE)
+    authorize(tmp_path, path, package=candidate_package)
+    installer = CpaInstaller(CpaSettings(tmp_path), candidate_package)
     with pytest.raises(ValueError, match='unaccepted_release'):
         installer.runtime_authorization()
 
 
-def test_permit_rewrite_only_authorizes_a_new_deadline(tmp_path, authorization_clock):
+def test_permit_rewrite_only_authorizes_a_new_deadline(tmp_path, candidate_package, authorization_clock):
     clock = authorization_clock
     path = tmp_path / 'authorization.json'
-    authorize(tmp_path, path, expires_at=clock.wall + 60)
-    installer = CpaInstaller(CpaSettings(tmp_path), PACKAGE, isolated_authorization=path)
+    authorize(tmp_path, path, package=candidate_package, expires_at=clock.wall + 60)
+    installer = CpaInstaller(CpaSettings(tmp_path), candidate_package, isolated_authorization=path)
     captured = installer.runtime_authorization()
     assert captured.current()
     assert captured.remaining() == pytest.approx(60)
 
-    authorize(tmp_path, path, expires_at=clock.wall + 3600)
+    authorize(tmp_path, path, package=candidate_package, expires_at=clock.wall + 3600)
     renewed = installer.runtime_authorization()
     clock.wall += 60
     clock.ticks += 60
