@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Corrected runtime release CI to request `blacksmith-4vcpu-ubuntu-2404` explicitly. Installing the Blacksmith app does not redirect `ubuntu-latest` jobs; manual dispatch remains build-and-verify only.
+- Documented the tag-only release trigger and on-demand, nonpublishing verification path. Branch pushes and pull-request merges do not start CI.
+- Added real workflow, Blacksmith verification, unlock, dashboard and credential-management screenshots to the README. UI captures use a network-isolated environment and a generated Claude account, not live credentials.
 
 ## preview-2026-10-16
 

@@ -112,6 +112,36 @@ While a native page is open, **Show CPA Console** / **Show plugin resource** swi
 
 Native plugins execute code inside CPA. The isolated web presentation does **not** sandbox that backend code; install only plugins you trust.
 
+### Console walkthrough
+
+These are real Agent Dashboard screenshots from a fresh, network-isolated
+qualification environment. The Claude account uses a generated
+`@example.invalid` address and fixture credentials. No live account, token or
+provider traffic appears in the images. These are not packaged Desktop
+screenshots; the patched-host requirements above still apply.
+
+Start from **CLI Proxy API Console** in the Hermes sidebar, then choose
+**Unlock CPA Console**. The trusted host explains the session's scope before
+opening the credential editor:
+
+![Trusted unlock dialog explaining time-limited credential management and fixed quota-read consent](docs/screenshots/console-unlock.png)
+
+The unlocked console stays inside Hermes. Its dashboard links to provider
+configuration, credential management, quota and logs. **Lock CPA Console**
+remains in the host header above the embedded application:
+
+![CPAMC dashboard embedded in Hermes with the host lock control and generated account inventory](docs/screenshots/console-dashboard.png)
+
+Use **OAuth Login** to enroll an account, then **Auth Files** to manage it.
+This capture follows a native OAuth callback against the local fixture
+authority. The card exposes quota refresh, model inspection, credential
+controls and the enabled state. It does not claim a live provider quota result.
+
+![Auth Files Management showing one enabled generated Claude credential and its quota refresh controls](docs/screenshots/console-auth-files.png)
+
+Lock ends this document's authority and removes the console frame. Choose
+**Reload**, then explicitly unlock a new trusted session to resume.
+
 ## Persistent qualification deployment
 
 This is a disposable **unaccepted development-candidate** environment, not a live-profile installer. The tooling intentionally refuses accepted release manifests. Requalification of an accepted release uses a derived test image with a generated unaccepted manifest: only its acceptance status, ADR status and minimum-host field change; runtime, console and notice hashes stay identical. Keep this fixture conversion out of the shipped package and never deploy the test image. Run the following pipeline from an unaccepted development checkout in Linux/WSL with Docker Compose:
@@ -249,6 +279,49 @@ Public source visibility does not expose a user's running CPA service. Managemen
 remains private to the owner, inference remains subject to its keys/grants, and
 live credentials, homes, environment files and runtime state are not artifacts.
 Bundled dependency license texts accompany the console and native archive.
+
+### Tag-triggered releases
+
+The only automatic CI trigger is a tag push matching `cpa-runtime-v*`.
+Ordinary branch pushes and pull-request merges do not start the workflow.
+
+| Event | Runs CI? | Publishes a release? |
+| --- | --- | --- |
+| Push a branch, including `main` | No | No |
+| Open, update or merge a pull request | No | No |
+| Push a `cpa-runtime-v*` tag | Yes | Only after the tag pin, build and digest checks pass |
+| Push another tag | No | No |
+| Manually select **Run workflow** | On demand only | No |
+
+Blacksmith's GitHub App needs access to the repository. The workflow selects
+`blacksmith-4vcpu-ubuntu-2404` explicitly; `ubuntu-latest` does not route to
+Blacksmith automatically. The release job uses `GITHUB_TOKEN` with
+`contents: write`, not a personal access token.
+
+![GitHub workflow showing the runtime tag filter and explicit Blacksmith runner](docs/screenshots/release-workflow.png)
+
+Before tagging a new runtime, commit the matching tag in
+`hermes-cpa/src/hermes_cpa/runtime_manifest.py` and
+`hermes-cpa/cpa-runtime.json`, regenerate the pinned artifact metadata, and
+verify the supported pair in `hermes-cpa/compatibility.json`. Tag that commit,
+then push only the intended tag:
+
+```sh
+git tag -a <new-pinned-runtime-tag> -m "CPA runtime release"
+git push origin refs/tags/<new-pinned-runtime-tag>
+```
+
+Do not move or reuse a published tag. CI rebuilds the native archive, runs the
+Go gates, checks its digest against the committed pin, and publishes the archive
+and `SHA256SUMS`. This workflow releases the Linux amd64 CPA runtime only; it
+does not package Hermes Desktop or produce a Windows installer.
+
+![Successful Blacksmith verification run with build and digest checks passing and publication skipped](docs/screenshots/blacksmith-verification.png)
+
+The pictured [verification run](https://github.com/Codeseys-Labs/hermes-cpa/actions/runs/39063896248)
+was a manual dispatch on Blacksmith. It reproduced the pinned archive and
+skipped publication. Manual verification still consumes runner time, so use it
+deliberately rather than on every commit.
 
 ### Dependency audit scope
 
