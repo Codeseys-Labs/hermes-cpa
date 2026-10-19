@@ -31,7 +31,7 @@ def main():
         for path in sorted((PACKAGE / directory).rglob('*.js')):
             if path.is_symlink():
                 raise ValueError('Launcher source must not be a symlink.')
-            sources[str(path.relative_to(PACKAGE))] = hashlib.sha256(path.read_bytes()).hexdigest()
+            sources[path.relative_to(PACKAGE).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     with tempfile.TemporaryDirectory(prefix='cpa-launchers-') as temporary:
         artifacts = {}
         staged = []
@@ -56,7 +56,7 @@ def main():
         for path, content in staged:
             path.write_bytes(content)
         (PACKAGE / 'assets/launchers.manifest.json').write_text(
-            json.dumps(manifest, indent=2) + '\n')
+            json.dumps(manifest, indent=2) + '\n', encoding='utf-8', newline='\n')
     print(json.dumps({'artifacts': artifacts, 'source_files': len(sources)}))
 
 

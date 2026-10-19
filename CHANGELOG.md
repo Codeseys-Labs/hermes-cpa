@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Recover failed console initialization with at most three document reads in total, the initial read plus two retries, and offer launcher-local recovery without reloading Desktop or Dashboard. Preserve captured selection fencing, document verification and explicit management unlock; never replay management operations or unknown outcomes.
 - Corrected runtime release CI to request `blacksmith-4vcpu-ubuntu-2404` explicitly. Installing the Blacksmith app does not redirect `ubuntu-latest` jobs; manual dispatch remains build-and-verify only.
 - Documented the tag-only release trigger and on-demand, nonpublishing verification path. Branch pushes and pull-request merges do not start CI.
 - Added real workflow, Blacksmith verification, unlock, dashboard and credential-management screenshots to the README. UI captures use a network-isolated environment and a generated Claude account, not live credentials.

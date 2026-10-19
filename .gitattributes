@@ -1,0 +1,6 @@
+hermes-cpa/console/*.js text eol=lf
+hermes-cpa/desktop/src/*.js text eol=lf
+hermes-cpa/dashboard/src/*.js text eol=lf
+hermes-cpa/desktop/plugin.js text eol=lf
+hermes-cpa/dashboard/index.js text eol=lf
+hermes-cpa/assets/launchers.manifest.json text eol=lf

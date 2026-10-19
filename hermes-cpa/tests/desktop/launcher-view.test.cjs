@@ -187,7 +187,7 @@ function createHost(name, log, capabilities) {
   };
 }
 
-async function openView(t, { dashboard, strict = false, capabilities = {} }) {
+async function openView(t, { dashboard, strict = false, capabilities = {}, configureHost, initialPhase = 'locked' }) {
   const { createCpaLauncher } = await loadView();
   const runtime = createRuntime();
   const log = [];
@@ -202,6 +202,7 @@ async function openView(t, { dashboard, strict = false, capabilities = {} }) {
     sessionFor: () => {
       const host = createHost(`host${hosts.length + 1}`, log, capabilities);
       hosts.push(host);
+      configureHost?.(host, hosts.length);
       return host;
     },
   });
@@ -209,7 +210,7 @@ async function openView(t, { dashboard, strict = false, capabilities = {} }) {
   if (strict) app.strictRemount();
   const guests = [];
   t.after(() => { app.unmount(); for (const close of guests) close(); });
-  await until(() => phaseOf(app) === 'locked', 'the verified console document');
+  await until(() => phaseOf(app) === initialPhase, `the ${initialPhase} console`);
   return {
     app,
     hosts,
@@ -260,6 +261,160 @@ async function openView(t, { dashboard, strict = false, capabilities = {} }) {
     },
   };
 }
+
+for (const dashboard of [false, true]) {
+  test(`${dashboard ? 'dashboard' : 'desktop'} initialization recovers from a transient document read without unlocking`, async t => {
+    let reads = 0;
+    const view = await openView(t, {
+      dashboard,
+      configureHost(host) {
+        const get = host.backend.get;
+        host.backend.get = async (...args) => {
+          reads += 1;
+          if (reads === 1) throw Object.assign(new Error('transport unavailable'), { code: 'PLUGIN_REQUEST_FAILED' });
+          return get(...args);
+        };
+      },
+    });
+    assert.equal(reads, 2);
+    assert.equal(view.hosts.length, 1);
+    assert.equal(view.log.some(entry => entry.includes(' post ')), false);
+    assert.ok(view.find(node => node.type === 'button' && textOf(node) === 'Unlock CPA Console'));
+  });
+}
+
+test('initialization exhausts three reads, then local retry captures a fresh owner without a window reload', async t => {
+  const reads = [];
+  let reloads = 0;
+  const reload = window.location.reload;
+  window.location.reload = () => { reloads += 1; };
+  t.after(() => { window.location.reload = reload; });
+  const view = await openView(t, {
+    dashboard: false,
+    initialPhase: 'error',
+    configureHost(host, index) {
+      const get = host.backend.get;
+      host.backend.get = async (...args) => {
+        reads.push(index);
+        if (index === 1) throw Object.assign(new Error('selection unavailable'), { code: 'PLUGIN_REQUEST_FAILED' });
+        return get(...args);
+      };
+    },
+  });
+  assert.deepEqual(reads, [1, 1, 1]);
+  const retry = view.find(node => node.type === 'button' && textOf(node) === 'Retry loading console');
+  assert.ok(retry);
+  retry.props.onClick();
+  await until(() => phaseOf(view.app) === 'locked', 'local retry recovery');
+  assert.deepEqual(reads, [1, 1, 1, 2]);
+  assert.ok(view.log.includes('host1 close'));
+  assert.equal(view.hosts[0].retireCallbacks.length, 0);
+  assert.equal(view.hosts.length, 2);
+  assert.equal(reloads, 0);
+  assert.equal(view.log.some(entry => entry.includes(' post ')), false);
+});
+
+test('a message-only stale selection is not automatically retried', async t => {
+  let reads = 0;
+  const view = await openView(t, {
+    dashboard: false,
+    initialPhase: 'error',
+    configureHost(host) {
+      host.backend.get = async () => { reads += 1; throw new Error('STALE_SCOPE'); };
+    },
+  });
+  assert.equal(reads, 1);
+  assert.ok(view.find(node => node.type === 'button' && textOf(node) === 'Retry loading console'));
+  assert.equal(view.log.some(entry => entry.includes(' post ')), false);
+});
+
+test('invalid console integrity is not automatically refetched or presented', async t => {
+  let reads = 0;
+  const view = await openView(t, {
+    dashboard: false,
+    initialPhase: 'error',
+    configureHost(host) {
+      host.backend.get = async () => {
+        reads += 1;
+        return { generation: 1, data: { html: html + 'tampered', manifest: { sha256 } } };
+      };
+    },
+  });
+  await pause(550);
+  assert.equal(reads, 1);
+  assert.equal(view.find(node => node.type === 'button' && textOf(node) === 'Unlock CPA Console'), undefined);
+  assert.equal(view.log.some(entry => entry.includes(' post ')), false);
+});
+
+for (const retire of [false, true]) {
+  test(`${retire ? 'retirement' : 'unmount'} cancels initialization retry and rejects late asset completion`, async t => {
+    let finish;
+    let reads = 0;
+    const view = await openView(t, {
+      dashboard: false,
+      initialPhase: 'loading',
+      configureHost(host) {
+        host.backend.get = () => {
+          reads += 1;
+          return new Promise(resolve => { finish = resolve; });
+        };
+      },
+    });
+    if (retire) await view.hosts[0].retireCallbacks[0]();
+    else view.app.unmount();
+    finish({ generation: 1, data: { html, manifest: { sha256 } } });
+    await pause(550);
+    assert.equal(reads, 1);
+    assert.notEqual(phaseOf(view.app), 'locked');
+    assert.equal(view.find(node => node.type === 'button' && textOf(node) === 'Unlock CPA Console'), undefined);
+    assert.equal(view.log.some(entry => entry.includes(' post ')), false);
+  });
+}
+
+test('retirement during retry backoff never reads through the retired owner', async t => {
+  let reads = 0;
+  const view = await openView(t, {
+    dashboard: false,
+    initialPhase: 'loading',
+    configureHost(host) {
+      host.backend.get = async () => { reads += 1; throw new Error('offline'); };
+    },
+  });
+  await until(() => reads === 1, 'first document read');
+  await view.hosts[0].retireCallbacks[0]();
+  await pause(550);
+  assert.equal(reads, 1);
+  assert.equal(phaseOf(view.app), 'ended');
+  assert.equal(view.hosts.length, 1);
+});
+
+test('an uncertain management operation retains receipt recovery and is never an initialization retry', async t => {
+  const view = await openView(t, { dashboard: false });
+  const host = view.hosts[0];
+  const post = host.backend.post;
+  let executions = 0;
+  host.backend.post = async (requestPath, body) => {
+    if (requestPath.split('?')[0] === '/console/prepare') {
+      return { data: { review_id: 'review-uncertain', summary: 'Generated operation', effects: [], requires_confirmation: false } };
+    }
+    if (requestPath.split('?')[0] === '/console/execute') {
+      executions += 1;
+      throw new Error('reply lost');
+    }
+    return post(requestPath, body);
+  };
+  await view.unlock();
+  const guest = await view.connectGuest();
+  const response = await guest.request('uncertain', 'management.request', {
+    method: 'PUT', path: '/v8/management/config', response_kind: 'json', body: { kind: 'json', value: {} },
+  });
+  assert.equal(response.error.code, 'OUTCOME_UNKNOWN');
+  await until(() => phaseOf(view.app) === 'unknown', 'unknown operation outcome');
+  assert.equal(executions, 1);
+  assert.equal(view.hosts.length, 1);
+  assert.equal(view.find(node => node.type === 'button' && textOf(node) === 'Retry loading console'), undefined);
+  assert.ok(view.find(node => node.type === 'button' && textOf(node) === 'Reload'));
+});
 
 const openPrompt = node => node.props && 'data-cpa-external-open' in node.props;
 const openLink = node => node.type === 'a' && node.props['data-cpa-action'] === 'open-external';
