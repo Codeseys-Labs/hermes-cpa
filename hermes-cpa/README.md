@@ -46,6 +46,28 @@ See the [repository installation guide](../README.md) for the pinned host patch.
 The private snapshot accepts patched Hermes 0.21.6; a minimum generally supported
 Desktop version remains unset. The console requires `plugins.isolation: host`.
 
+### Console initialization recovery
+
+Desktop and Dashboard make at most three initial console-document reads in total:
+the first read plus two retries, with 500 ms and 1 s between attempts and a 10 s timeout per read. The
+reads stay bound to the captured profile and connection. Selection retirement
+or unmount stops pending retries; document verification failures are not
+automatically retried.
+
+If loading still fails, check the backend connection and that CPA is enabled
+for the selected profile, then choose **Retry loading console**. This closes
+the failed captured session and initializes a new launcher session without
+reloading Desktop or the Dashboard page. A document verification failure
+requires checking the plugin installation before retrying. Management remains
+locked until a separate explicit Unlock.
+
+Only initialization reads use this recovery. Unlock, management operations,
+native resources and unknown-outcome receipts are never replayed by it.
+Post-unlock errors and ended sessions retain their existing Reload behavior.
+Hermes Desktop may report different transport failures through the same
+`PLUGIN_REQUEST_FAILED` category, so this message cannot identify the original
+backend refusal or timeout.
+
 ## Credentials and console authority
 
 The managed instance's public API keys, upstream provider keys and OAuth account

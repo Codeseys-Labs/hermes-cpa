@@ -106,6 +106,8 @@ export function createCpaLauncher({
     const [resourceVisible, setResourceVisible] = React.useState(false);
     const [operationReceipts, setOperationReceipts] = React.useState([]);
     const [externalOpen, setExternalOpen] = React.useState(null);
+    const [initialization, setInitialization] = React.useState(0);
+    const [initializationFailed, setInitializationFailed] = React.useState(false);
 
     const releaseHost = React.useCallback((ownedHost) => {
       if (hostSession.current === ownedHost) hostSession.current = null;
@@ -155,6 +157,10 @@ export function createCpaLauncher({
 
     React.useEffect(() => {
       active.current = true;
+      setAsset(null);
+      setInitializationFailed(false);
+      setPhase('loading');
+      setMessage('Loading verified CPA console…');
       if (!dashboard && SandboxedFrame?.supportsVerifiedDocument !== true) {
         setPhase('error');
         setMessage('This Hermes Desktop version cannot verify the CPA console document.');
@@ -171,35 +177,60 @@ export function createCpaLauncher({
         void releaseHost(ownedHost);
         setPhase('error');
         setMessage('The CPA host session is unavailable.');
+        setInitializationFailed(true);
         return () => { active.current = false; };
       }
       hostSession.current = ownedHost;
       let mounted = true;
+      let retryTimer;
+      const current = () => mounted && hostSession.current === ownedHost;
       const backend = ownedHost.backend;
       const unsubscribeRetire = typeof ownedHost.onRetire === 'function'
-        ? ownedHost.onRetire(() => retireHost(ownedHost))
+        ? ownedHost.onRetire(() => {
+          clearTimeout(retryTimer);
+          return retireHost(ownedHost);
+        })
         : undefined;
-      void (async () => {
+      const loadAsset = async (attempt) => {
+        if (!current()) return;
+        let response;
         try {
-          const response = await backend.get(appendProfile('/console/asset', capturedProfile), { timeoutMs: 10000 });
+          response = await backend.get(appendProfile('/console/asset', capturedProfile), { timeoutMs: 10000 });
+        } catch (error) {
+          if (!current()) return;
+          if (attempt < 3 && error?.code !== 'STALE_SCOPE' && error?.message !== 'STALE_SCOPE') {
+            setMessage(`The CPA console could not load. Retrying document read (${attempt + 1}/3)…`);
+            retryTimer = setTimeout(() => { void loadAsset(attempt + 1); }, attempt * 500);
+            return;
+          }
+          setPhase('error');
+          setInitializationFailed(true);
+          setMessage('The CPA console could not load. Check the backend connection and that CPA is enabled for this profile, then retry.');
+          return;
+        }
+        if (!current()) return;
+        try {
           const next = await verifiedAsset(response);
-          if (!mounted || hostSession.current !== ownedHost) return;
+          if (!current()) return;
           setAsset(next);
           setPhase('locked');
           setMessage('Unlock CPA management to open the full console.');
-        } catch (error) {
-          if (!mounted || hostSession.current !== ownedHost) return;
+        } catch {
+          if (!current()) return;
           setPhase('error');
-          setMessage(errorMessage(error?.code));
+          setInitializationFailed(true);
+          setMessage('The CPA console document could not be verified. Check the plugin installation before retrying.');
         }
-      })();
+      };
+      void loadAsset(1);
       return () => {
         mounted = false;
+        clearTimeout(retryTimer);
         active.current = false;
         if (typeof unsubscribeRetire === 'function') unsubscribeRetire();
         if (!closeSession()) void releaseHost(ownedHost);
       };
-    }, [capturedProfile, closeSession, releaseHost, retireHost]);
+    }, [capturedProfile, closeSession, initialization, releaseHost, retireHost]);
 
     React.useEffect(() => {
       const listener = event => {
@@ -394,7 +425,15 @@ export function createCpaLauncher({
         (phase === 'ready' || phase === 'connecting') ? h('button', { type: 'button', onClick: () => void closeSession() }, 'Lock CPA Console') : null,
         resourceFrame ? h('button', { type: 'button', onClick: () => setResourceVisible(current => !current) }, resourceVisible ? 'Show CPA Console' : 'Show plugin resource') : null,
         resourceFrame ? h('button', { type: 'button', onClick: () => void session.current?.closeResource() }, 'Close plugin resource') : null,
-        (phase === 'error' || phase === 'ended' || phase === 'unknown') ? h('button', { type: 'button', onClick: () => window.location.reload() }, 'Reload') : null,
+        phase === 'error' && initializationFailed ? h('button', {
+          type: 'button',
+          onClick: () => {
+            setInitializationFailed(false);
+            setInitialization(current => current + 1);
+          },
+        }, 'Retry loading console') : null,
+        (phase === 'error' && !initializationFailed || phase === 'ended' || phase === 'unknown')
+          ? h('button', { type: 'button', onClick: () => window.location.reload() }, 'Reload') : null,
       ),
       externalOpenPanel,
       h('div', { style: { flex: '1 1 0', minHeight: 0, position: 'relative' } },
