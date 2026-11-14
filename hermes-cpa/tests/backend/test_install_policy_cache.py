@@ -82,7 +82,9 @@ def settled(monkeypatch):
 
 
 @pytest.mark.parametrize('replacement', [False, True])
-def test_rewrite_and_exact_restore_revokes_without_epoch(files, epoch, settled, replacement):
+def test_rewrite_and_exact_restore_keeps_owner_without_epoch(files, epoch, settled, replacement):
+    """Without host policy epochs (stock Hermes) a rewrite that leaves this plugin's projection unchanged keeps the
+    owner, so unrelated config writes never stop CPA. Work accepted before the rewrite still does not match."""
     epoch.value = None
     policy = files.policy()
     assert policy() and policy()
@@ -92,10 +94,9 @@ def test_rewrite_and_exact_restore_revokes_without_epoch(files, epoch, settled, 
     else:
         files.write(files.config, DISABLED)
         files.write(files.config, MANAGED)
-    assert policy() is False
+    assert policy() is True
     assert policy.matches(accepted) is False
-    assert policy.capture() is None
-    assert files.policy()(), 'a new owner samples the current policy'
+    assert policy.capture() is not None
 
 
 def test_same_size_disable_revokes_even_with_unchanged_epoch(files, epoch, settled):
@@ -206,7 +207,7 @@ def test_parse_error_after_cached_parse_fails_closed(files, epoch, settled, brok
     with pytest.raises(Exception):
         policy.matches(accepted)
     files.write(files.config, MANAGED)
-    assert policy() is False, 'restored bytes after a rewrite without an epoch must not revive'
+    assert policy() is True, 'without an epoch, restored managed policy keeps the owner'
     assert policy.matches(accepted) is False
 
 

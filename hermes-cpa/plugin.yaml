@@ -1,9 +1,9 @@
 name: hermes-cpa
-version: 1.0.0
-description: Standalone native CPA lifecycle controller and embedded CPA-MC console
-# Load gate only. Managed setup, enrollment and autostart additionally require the
-# documented host-integration contract (hermes_cpa.host_compat) at runtime.
-requires_hermes: ">=0.21.6"
+version: 1.1.0
+description: Native CPA lifecycle controller and local inference broker for stock Hermes
+# Runs on stock Hermes >= 0.23 with plugins.isolation: in_process. The patched-host
+# capabilities in hermes_cpa.host_compat are reported, not required.
+requires_hermes: ">=0.23.0"
 author: Nous Research
 license: MIT
 entry_point: hermes_cpa:register

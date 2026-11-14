@@ -4,8 +4,12 @@ Requires the patched host on PYTHONPATH (durable per-plugin policy epoch). Gener
 homes only. Raw external same-projection ABA is documented as unsupported; the strict
 fallback without an epoch is covered by test_owner_policy_incarnation.py.
 """
+import importlib.util
+
 import pytest
 from hermes_cpa.supervisor import InstallPolicy
+
+_EPOCHS = importlib.util.find_spec('hermes_cli.plugin_policy_epoch') is not None
 
 
 @pytest.fixture
@@ -61,6 +65,7 @@ def test_unrelated_edit_keeps_service_but_revokes_accepted_operation(policy_home
     assert policy.matches(policy.capture()), 'a fresh operation under the same policy was refused'
 
 
+@pytest.mark.skipif(not _EPOCHS, reason='needs host policy epochs (patched host); stock Hermes has none')
 def test_disable_reenable_through_hermes_revokes_without_intermediate_sample(policy_home):
     policy = InstallPolicy(*policy_home)
     assert policy()

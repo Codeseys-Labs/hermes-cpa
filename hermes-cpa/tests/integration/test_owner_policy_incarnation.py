@@ -1,4 +1,4 @@
-"""Policy removal/disable ABA cannot revive an existing owner's authority."""
+"""Owner incarnation: package replacement revokes; a same-projection config rewrite keeps the owner."""
 from hermes_cpa.supervisor import InstallPolicy
 
 
@@ -13,15 +13,20 @@ def policy_files(tmp_path):
     return home, package, config, manifest
 
 
-def test_disable_reenable_between_samples_rejects_old_owner(tmp_path):
+def test_same_projection_config_rewrite_keeps_owner(tmp_path):
+    """Without host policy epochs a disable/re-enable between two samples is indistinguishable from an unrelated
+    write; the owner stays because this plugin's projection is unchanged. A persisted disable still revokes."""
     home, package, config, _ = policy_files(tmp_path)
     policy = InstallPolicy(home, package)
     assert policy()
     original = config.read_bytes()
     config.write_text('plugins: {enabled: []}\n')
     config.write_bytes(original)
+    assert policy() is True
+    config.write_text('plugins: {enabled: []}\n')
     assert policy() is False
-    assert policy() is False
+    config.write_bytes(original)
+    assert policy() is False, 'revocation must stay latched'
     assert InstallPolicy(home, package)()
 
 

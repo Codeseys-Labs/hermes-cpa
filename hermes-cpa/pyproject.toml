@@ -1,7 +1,7 @@
 [project]
 name = "hermes-cpa"
-version = "1.0.0"
-description = "Native CPA lifecycle and CPA-MC desktop integration plugin for Hermes"
+version = "1.1.0"
+description = "Native CPA lifecycle controller and local inference broker plugin for stock Hermes"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 dependencies = [
