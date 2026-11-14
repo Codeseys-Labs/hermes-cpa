@@ -1,42 +1,35 @@
 # Hermes CPA
 
-Preview integration of [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), its full pinned management console, and Hermes Agent. The agent plugin owns CPA and a local inference broker. CPAMC is available through the Agent Dashboard without Desktop; the optional desktop component opens the same console in a docked workspace beside chat, using the Monitoring Dashboard workspace mechanism.
+Integration of [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) and Hermes Agent. The agent plugin owns a managed CPA process and a local inference broker, and enrolls them as the `custom:cpa` provider.
 
-**Public preview, not stock-Hermes or packaged-Windows certification.** The accepted `snapshot-2026-10-15` baseline and subsequent console improvements target the patched Hermes 0.21.6 integration used by the live WSL backend and Windows development Desktop. Stock Hermes lacks the required host contract; a minimum generally supported Desktop version remains unset. Publishing source does not remove these compatibility gates.
+**This branch targets stock Hermes Agent 0.23 or later.** It loads in-process and needs no host patch. The Agent Dashboard console and the optional Desktop panel of the earlier patched-host preview are removed. Manage CPA with `hermes cpa` and the CPA runtime's own login commands. Sections below that describe the console, Desktop or patched-host qualification document that earlier preview.
 
 ## Repository
 
-- `hermes-cpa/`: unified directory-installable agent/desktop plugin and shipped console asset.
-- `upstream-console/`: CPAMC 1.25.6 source with the paired Hermes sandbox transport.
-- `host-integration/`: explicit host patch and per-file provenance against Hermes commit `0ed432d1871a9a9b169f5a778f6f9444fc13e0c1`.
+- `hermes-cpa/`: the directory-installable agent plugin.
+- `upstream-console/`: CPAMC 1.25.6 source with the earlier Hermes sandbox transport (reference; not shipped by this plugin).
+- `host-integration/`: the earlier patched-host contract against Hermes commit `0ed432d1871a9a9b169f5a778f6f9444fc13e0c1` (reference; not required).
 - `scripts/`: console provenance, host-patch export and private-root qualification.
 - `.pi-flow/`: execution contract and GitHub tracker configuration.
 - `qualification/`: pinned backend image, isolated Compose deployment and qualification regressions.
 
-## Host and package installation
+## Installation on stock Hermes
 
-Use a disposable Linux/WSL qualification checkout and a separate `HERMES_HOME`. Do not apply the patch over an existing modified/live checkout. The patch is pinned to [this upstream Hermes revision](https://github.com/NousResearch/hermes-agent/commit/0ed432d1871a9a9b169f5a778f6f9444fc13e0c1).
+Load plugins in-process in the owning profile's `config.yaml`. The stock plugin host does not forward plugin CLI commands, so `hermes cpa` exists only in-process. This setting applies to every plugin in that profile:
 
-```sh
-git clone https://github.com/NousResearch/hermes-agent.git hermes-cpa-host
-cd hermes-cpa-host
-git checkout 0ed432d1871a9a9b169f5a778f6f9444fc13e0c1
-git apply --check /path/to/hermes-cpa/host-integration/patches/0001-scoped-cpa-host-contract.patch
-git apply /path/to/hermes-cpa/host-integration/patches/0001-scoped-cpa-host-contract.patch
+```yaml
+plugins:
+  isolation: in_process
 ```
 
-Prepare that checkout using its own installation instructions. The contract adds authenticated request/selection/operation authority, zero-TTL request grants, scoped plugin-policy epochs, and native CLI execution within the isolated plugin host. A version string alone is insufficient: managed setup checks these capabilities before side effects.
-
-The Dashboard/Desktop console requires `plugins.isolation: host` in the owning Hermes configuration. The optional Desktop half must be enabled separately. The tested Windows development build uses Hermes commit `302c5d9f67` with the Desktop host patch; WSL uses the pinned revision above. These are patched checkouts, not a self-contained Desktop installer. Save host changes before `hermes update`; an update can conflict with or replace the required contract.
-
-Install the package subdirectory through the patched Hermes CLI, pinning an exact published commit:
+Install the package subdirectory, pinning an exact published commit:
 
 ```sh
 hermes plugins install 'https://github.com/Codeseys-Labs/hermes-cpa.git#hermes-cpa' \
-  --ref <40-character-commit-sha> --no-deps --no-enable
+  --ref <40-character-commit-sha> --enable
 ```
 
-This installs disabled without changing the shared Python environment. Review the installer security scan and dependency plan before enabling with `hermes plugins enable hermes-cpa`. Do not bypass scan or dependency-admission refusals. Dependencies are declared in `pyproject.toml` and `plugin.yaml`; bcrypt is required for managed onboarding. A Python wheel alone lacks the console resources and is not a complete managed installation.
+Dependencies are declared in `pyproject.toml` and `plugin.yaml`; bcrypt is required for managed onboarding. Review the installer's security scan and dependency plan; do not bypass scan or dependency-admission refusals.
 
 Registration is inert until explicitly configured. The supported managed entry point is:
 
@@ -46,7 +39,18 @@ hermes cpa setup --download --consent
 hermes cpa setup --archive /path/to/CLIProxyAPI_8.0.21_hermes-owner-v1_linux_amd64.tar.gz --consent
 ```
 
-Accepted snapshots permit explicit managed setup on the documented patched host. Unaccepted builds require an expiring, home/package/manifest-bound isolated-validation permit (`--isolated-authorization`); those permits authorize generated-data qualification, not live installation. The pinned pair is CPA 8.0.21 with the `hermes-owner-v1` integration and CPAMC 1.25.6, on Linux amd64. A stock CPA archive is not interchangeable. The current `--download` path still requires authenticated `gh`, even for the public repository, and verifies the exact pinned runtime asset's size and SHA-256. Alternatively, supply that verified archive with `--archive`; setup never falls back to a public stock binary.
+The pinned pair is CPA 8.0.21 with the `hermes-owner-v1` integration, on Linux amd64. A stock CPA archive is not interchangeable. The `--download` path requires authenticated `gh`, even for the public repository, and verifies the exact pinned runtime asset's size and SHA-256. Alternatively, supply that verified archive with `--archive`; setup never falls back to a public stock binary.
+
+Account logins use the runtime's own OAuth flows against the managed instance's configuration, for example:
+
+```sh
+~/.hermes/cpa/bin/8.0.21-hermes-owner-v1/cli-proxy-api \
+  -config ~/.hermes/cpa/instances/default/config.yaml -claude-login -no-browser
+```
+
+The command prints an authorization URL, waits for the `localhost` callback and saves the credential into the instance's `auth/` directory, which the running owner picks up.
+
+On stock Hermes, `key_cmd` grants report their real lifetime (Hermes caches each for a few seconds rather than per request), and the supervisor keeps the owner running across unrelated `config.yaml` writes while revoking it when this plugin's own policy changes.
 
 ### WSL Desktop reconnect reliability
 

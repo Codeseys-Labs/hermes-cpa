@@ -84,25 +84,14 @@ def warm_host(home):
         reset_hermes_home_override(token)
 
 
-def test_unsupported_host_refuses_before_any_mutation(home, tmp_path, monkeypatch, capsys):
+def test_stock_host_capabilities_are_reported_not_required(monkeypatch):
+    """Stock Hermes lacks the patched-host capabilities; setup, enrollment and autostart must not refuse on them."""
     from agent.command_token_source import CommandTokenSource
-    warm_host(home)
-    monkeypatch.setattr(CommandTokenSource, 'supports_single_request_grants', False)
-    before = tree(home)
-    assert cli.main(['setup', '--download', '--consent']) == 1
-    assert 'Unsupported Hermes CPA host' in capsys.readouterr().out
-    assert cli.main(['provider-enroll', '--consent', '--base-url', 'http://127.0.0.1:9/v1',
-                     '--control', str(tmp_path / 'supervisor.sock')]) == 1
-    assert 'Unsupported Hermes CPA host' in capsys.readouterr().out
-    assert tree(home) == before, 'unsupported host changed home state'
-    # Remembered managed startup is also refused before any lease or launch.
-    (home / 'config.yaml').write_text(
-        'plugins:\n  enabled: [hermes-cpa]\n  entries:\n    hermes-cpa:\n'
-        '      settings: {mode: managed, autostart: true}\n')
-    before = tree(home)
-    from hermes_cpa.lifetime import RegistrationLifetime
-    assert RegistrationLifetime(home, PACKAGE).begin() == 'unsupported_host'
-    assert tree(home) == before
+    from hermes_cpa.host_compat import HOST_CONTRACT_VERSION, require_supported_host
+    monkeypatch.setattr(CommandTokenSource, 'supports_single_request_grants', False, raising=False)
+    capabilities = require_supported_host()
+    assert capabilities['version'] == HOST_CONTRACT_VERSION
+    assert capabilities['single_request_grants'] is False
 
 
 @pytest.fixture

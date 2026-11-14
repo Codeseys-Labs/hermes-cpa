@@ -159,9 +159,11 @@ class InstallPolicy:
         allowed, incarnation, epoch, projection = self._sample()
         if allowed and self._pinned is not None:
             pinned, pinned_epoch, pinned_projection = self._pinned
+            # A rewritten config.yaml keeps the owner when this plugin's own policy projection is unchanged.
+            # Hosts without policy epochs (stock Hermes) report epoch None on both sides, so an unrelated
+            # config write no longer revokes the owner; a changed projection still does.
             allowed = (incarnation[:3] == pinned[:3] and epoch == pinned_epoch and
-                       (incarnation[3] == pinned[3] or
-                        (epoch is not None and projection == pinned_projection)))
+                       (incarnation[3] == pinned[3] or projection == pinned_projection))
         if not allowed:
             self._revoked = True
             return False

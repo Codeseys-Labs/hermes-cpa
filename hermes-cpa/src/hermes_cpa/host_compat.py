@@ -1,8 +1,13 @@
-"""Validate the supported host contract before managed setup changes state."""
+"""Report the host contract; stock Hermes (>= 0.23) is sufficient.
+
+The optional capabilities below come from the earlier patched host. On stock Hermes the plugin runs
+in-process (``plugins.isolation: in_process``), key_cmd grants report their real lifetime, and the
+supervisor's policy check falls back to this plugin's own config projection.
+"""
 from importlib import import_module
 
 
-HOST_CONTRACT_VERSION = 1
+HOST_CONTRACT_VERSION = 2
 
 
 def host_capabilities():
@@ -58,15 +63,5 @@ def host_capabilities():
 
 
 def require_supported_host():
-    capabilities = host_capabilities()
-    missing = [
-        name for name, available in capabilities.items()
-        if name != 'version' and available is not True
-    ]
-    if missing:
-        raise RuntimeError(
-            'Unsupported Hermes CPA host: ' + ', '.join(missing) + '. '
-            'Install the documented host-integration contract before managed setup; '
-            'no credentials, configuration, or processes have been changed.'
-        )
-    return capabilities
+    """Managed setup runs on stock Hermes; the capability report is informational."""
+    return host_capabilities()

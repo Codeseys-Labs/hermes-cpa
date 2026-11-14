@@ -129,12 +129,10 @@ def test_upgrade_requires_unavailable_recovery_before_writes(case):
     assert case.settings.config_path.read_bytes() == before
 
 
-@pytest.mark.parametrize('damage', ['console', 'notices', 'pair', 'hash', 'manifest', 'runtime',
+@pytest.mark.parametrize('damage', ['notices', 'pair', 'hash', 'manifest', 'runtime',
                                     'unpinned', 'stock_pair', 'pair_digest'])
 def test_target_rejected_before_stop_or_stage(case, damage):
-    if damage == 'console':
-        (case.root / 'assets/cpamc.html').write_bytes(b'changed')
-    elif damage == 'notices':
+    if damage == 'notices':
         (case.root / 'LICENSE').unlink()
     elif damage == 'pair':
         case.manifest['supported_pairs'][0]['cpa_version'] = '8.0.22'

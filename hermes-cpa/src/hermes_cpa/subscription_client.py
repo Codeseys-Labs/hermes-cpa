@@ -43,6 +43,19 @@ def provider_runtime(control_path, home, base_url):
             'provider': 'custom', 'api_mode': 'chat_completions'}
 
 
+def grant_lifetime(token):
+    """Seconds this grant stays valid, read from its signed record.
+
+    Hermes caches a ``key_cmd`` token until shortly before ``expires_in`` (stock: ``max(expires_in - 60, 5)``
+    seconds), so reporting the real lifetime keeps every cached grant inside its validity window.
+    """
+    try:
+        expiry = json.loads(bytes.fromhex(token.split('.', 1)[0]))[3]
+        return max(1, int(expiry - time.time()))
+    except Exception:
+        return 1
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Mint a revocable local inference grant, not an upstream key')
@@ -57,10 +70,10 @@ def main():
         from hermes_constants import get_hermes_home
         home = get_hermes_home()
     try:
-        print(json.dumps({'access_token': grant_token(args.control, home, enrolled=args.enrolled),
-                          'expires_in': 0}))
+        token = grant_token(args.control, home, enrolled=args.enrolled)
     except RuntimeError:
         parser.exit(1, 'Subscription broker unavailable; no credential fallback.\n')
+    print(json.dumps({'access_token': token, 'expires_in': grant_lifetime(token)}))
 
 
 if __name__ == '__main__':

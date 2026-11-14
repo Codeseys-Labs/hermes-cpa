@@ -132,8 +132,10 @@ JSON/SSE media types are returned. This is not a general filter for encoded
 secrets or unknown upstream provider credentials.
 
 Limits: 32 connection threads, 1MiB input, 8MiB response, 10s socket/inactivity
-bounds, and a 300s total response-I/O deadline starting before connection setup,
-capped by the captured candidate lease when present.
+bounds on ingress and upstream connect, and a 300s total response-I/O deadline
+starting before connection setup, capped by the captured candidate lease when present.
+Upstream reads wait up to the remaining response deadline rather than 10s: a
+non-streaming completion sends nothing until the model finishes.
 One timer per admitted request shuts down captured upstream/downstream sockets,
 including trickling response headers/body and blocked slow-consumer writes. The
 HTTP trace extension captures the upstream socket before headers arrive; connect

@@ -2,7 +2,6 @@
 import json
 import pytest
 from hermes_cpa.management_features import project_feature
-from test_api import setup, headers
 
 SECRET = 'sk-generated-canary-never-render'
 
@@ -43,14 +42,3 @@ def test_callback_capable_reads_are_unsupported_without_transport(tmp_path, feat
             pytest.fail('Unsupported view must never contact CPA')
     controller = CpaController(CpaSettings(tmp_path), adapter=Adapter())
     assert controller.get_feature(feature) == {'available': False, 'reason': 'PLUGIN_CALLBACK_UNSAFE'}
-
-
-@pytest.mark.parametrize('method', ['POST', 'PUT', 'PATCH', 'DELETE'])
-@pytest.mark.parametrize('feature', ['providers', 'auth', 'oauth', 'models', 'quota', 'logs'])
-def test_disabled_mutations_rejected_before_controller(setup, method, feature):
-    client, host = setup
-    host.controller.get_feature = lambda *_: pytest.fail('Mutation reached controller')
-    result = client.request(method, '/api/plugins/hermes-cpa/features/' + feature,
-                            headers=headers(host), json={'name': SECRET})
-    assert result.status_code in (404, 405)
-    assert SECRET not in result.text
