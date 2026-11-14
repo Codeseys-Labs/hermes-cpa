@@ -210,17 +210,6 @@ class CpaInstaller:
         if content is not None and (len(content) != artifact.binary_size or
                                     hashlib.sha256(content).hexdigest() != artifact.binary_sha256):
             raise ValueError('binary_mismatch')
-        asset = self.package_root / 'assets/cpamc.html'
-        # Full adapted-source provenance is 71KB for the pinned console. This
-        # offline manifest is not a guest message; keep the 1MiB input bound.
-        asset_manifest = json.loads(bounded_file(self.package_root / 'assets/cpamc.manifest.json', 1024 * 1024))
-        if not isinstance(asset_manifest, dict):
-            raise ValueError('invalid_manifest')
-        if (hashlib.sha256(bounded_file(asset, 8 * 1024 * 1024)).hexdigest() != pair.get('console_sha256') or
-                asset_manifest.get('sha256') != pair.get('console_sha256') or
-                asset_manifest.get('version') != pair['console_version'] or
-                asset_manifest.get('cpa_version') != pair['cpa_version']):
-            raise ValueError('console_mismatch')
         notices = manifest.get('notice_sha256', {})
         if not isinstance(notices, dict):
             raise ValueError('invalid_manifest')

@@ -28,7 +28,7 @@ from .process_owner import private_directory, private_open, require_platform
 DEPENDENCIES = ('bcrypt', 'ruamel.yaml', 'httpx', 'psutil', 'pydantic')
 # The unified Git directory install carries these; a wheel does not.
 PACKAGE_RESOURCES = ('plugin.yaml', 'compatibility.json', 'cpa-runtime.json', 'LICENSE',
-                     'THIRD_PARTY_NOTICES.md', 'assets/cpamc.html', 'assets/cpamc.manifest.json')
+                     'THIRD_PARTY_NOTICES.md')
 UNCHANGED = ' Nothing was changed.'
 # Pre-integration setups stored private broker keys under these names. Their
 # presence makes setup refuse; setup never reuses, rotates or deletes them.

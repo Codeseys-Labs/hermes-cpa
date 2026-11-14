@@ -27,8 +27,7 @@ def test_archive_unsafe_kinds(case, kind):
     assert not case.owner.calls and not case.settings.bin_dir.exists()
 
 
-@pytest.mark.parametrize('target', ['compatibility.json', 'cpa-runtime.json', 'assets/cpamc.manifest.json',
-                                    'assets/cpamc.html', 'LICENSE'])
+@pytest.mark.parametrize('target', ['compatibility.json', 'cpa-runtime.json', 'LICENSE'])
 def test_package_symlinks_rejected(case, target):
     path = case.root / target
     outside = case.tmp / 'outside'
