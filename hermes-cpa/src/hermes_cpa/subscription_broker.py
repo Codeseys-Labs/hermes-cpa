@@ -153,6 +153,7 @@ class SubscriptionBroker:
     INGRESS_TIMEOUT = 10
     RESOLVE_TIMEOUT = 2
     RESPONSE_TIMEOUT = 300
+    CONNECT_TIMEOUT = 10
 
     def __init__(self, owner_home, upstream, *, port=8319, authorization=None):
         self.home = Path(owner_home)
@@ -457,14 +458,20 @@ class SubscriptionBroker:
 
     @contextmanager
     def _upstream(self, method, path, body, key, budget):
-        """One admitted upstream exchange; the budget owns every socket it opens."""
-        timeout = min(10, self.RESPONSE_TIMEOUT)
+        """One admitted upstream exchange; the budget owns every socket it opens.
+
+        Connect stays bounded at 10s. Reads wait up to the remaining response budget: a
+        non-streaming completion sends nothing until the model finishes, so a 10s read
+        bound refused every completion slower than that. The budget timer still ends it."""
+        connect = min(self.CONNECT_TIMEOUT, self.RESPONSE_TIMEOUT)
+        read = max(1., budget.deadline - time.monotonic())
         if self._private is not None:
-            with self._private.stream(method, path, body, timeout=timeout,
+            with self._private.stream(method, path, body, timeout=connect, read_timeout=read,
                                       register=budget.register) as response:
                 yield response
             return
-        with httpx.Client(trust_env=False, follow_redirects=False, timeout=timeout) as client:
+        with httpx.Client(trust_env=False, follow_redirects=False,
+                          timeout=httpx.Timeout(read, connect=connect)) as client:
             budget.check()
             with client.stream(method, self.upstream + path, content=body,
                     headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'},

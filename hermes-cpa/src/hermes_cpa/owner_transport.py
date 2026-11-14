@@ -383,7 +383,7 @@ class InferenceChannel(PrivateChannel):
         super().__init__(directory, INFERENCE_SOCKET, peer)
 
     @contextmanager
-    def stream(self, method, path, body, *, timeout, register=None):
+    def stream(self, method, path, body, *, timeout, read_timeout=None, register=None):
         if (method, path) not in INFERENCE_ROUTES or len(body) > INFERENCE_BODY_LIMIT:
             raise TransportError('INVALID_REQUEST')
         sock = connect_private(self.directory, self.name, self._peer(), timeout=timeout,
@@ -391,7 +391,7 @@ class InferenceChannel(PrivateChannel):
         connection = _PeerConnection(sock)
         sent = False
         try:
-            sock.settimeout(timeout)
+            sock.settimeout(timeout if read_timeout is None else read_timeout)
             connection.putrequest(method, path, skip_accept_encoding=True)
             connection.putheader('Content-Type', 'application/json')
             connection.putheader('Content-Length', str(len(body)))

@@ -195,3 +195,39 @@ def test_fixed_plugin_dispatch_surfaces_accept_private_revision(tmp_path, method
 def test_plugin_revision_extension_does_not_authorize_other_v8_routes(tmp_path, method, path):
     channel = ControlChannel(tmp_path, lambda: None)
     assert refusal(channel, method, path, {'X-Hermes-Plugin-Revision': REVISION}) == 'INVALID_REQUEST'
+
+
+@pytest.mark.parametrize('read_timeout,expected', [(7., 7.), (None, 10.)])
+def test_inference_stream_connects_with_connect_bound_and_reads_with_read_bound(
+        tmp_path, monkeypatch, read_timeout, expected):
+    import io
+    from hermes_cpa import owner_transport as module
+    from hermes_cpa.owner_transport import InferenceChannel
+
+    seen = {'connect': None, 'read': []}
+    reply = b'HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}'
+
+    class Socket:
+        def settimeout(self, timeout):
+            seen['read'].append(timeout)
+
+        def sendall(self, data):
+            pass
+
+        def makefile(self, *args):
+            return io.BytesIO(reply)
+
+        def close(self):
+            pass
+
+    def connect(*args, timeout, register=None):
+        seen['connect'] = timeout
+        return Socket()
+
+    monkeypatch.setattr(module, 'connect_private', connect)
+    channel = InferenceChannel(tmp_path, lambda: None)
+    with channel.stream('POST', '/v1/chat/completions', b'{}', timeout=10., read_timeout=read_timeout):
+        pass
+    # A slow non-streaming completion must not inherit the connect bound as its read bound.
+    assert seen['connect'] == 10.
+    assert seen['read'] == [expected]
